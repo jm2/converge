@@ -4,6 +4,46 @@ How to write, register, compose, and test Converge blueprints, plus a complete r
 
 For real-world blueprints, see the [blueprints/](../blueprints/) directory, including [CIS L1 benchmarks](../blueprints/cis/) for Windows, Ubuntu, and macOS.
 
+**Getting started:**
+[What Is a Blueprint](#what-is-a-blueprint) ·
+[Writing a Blueprint](#writing-a-blueprint) ·
+[Registering in main.go](#registering-in-maingo) ·
+[Platform-Conditional Logic](#platform-conditional-logic) ·
+[Dependencies](#explicit-dependencies-with-dependson) ·
+[Daemon Mode](#daemon-mode-converge-serve) ·
+[Composition](#blueprint-composition) ·
+[Testing](#testing-blueprints)
+
+**Resources:**
+[File](#file) ·
+[Package](#package) ·
+[Service](#service) ·
+[Exec](#exec) ·
+[User](#user) ·
+[Template](#template) ·
+[Hostname](#hostname) ·
+[Cron](#cron) ·
+[Repository](#repository) ·
+[Firewall](#firewall) ·
+[Reboot](#reboot) ·
+[InShard](#inshard) ·
+[Secret](#secret--encrypted-config)
+
+**Platform-specific:**
+[Registry](#registry-windows-only) ·
+[SecurityPolicy](#securitypolicy-windows-only) ·
+[AuditPolicy](#auditpolicy-windows-only) ·
+[Sysctl](#sysctl-linux-only) ·
+[KernelModule](#kernelmodule-linux-only) ·
+[Plist](#plist-macos-only)
+
+**[Conditions](#conditions):**
+[NetworkInterface](#networkinterface-vpn-gated-firewall-rules) ·
+[MountPoint](#mountpoint-nfs-backed-service) ·
+[FileExists](#fileexists-cert-enrollment-after-bootstrap) ·
+[NetworkReachable](#networkreachable-proxy-config-before-package-installs) ·
+[RegistryKey/Value](#registrykeyexists--registryvalueexists--registryvalueequals-windows-only)
+
 ---
 
 ## What Is a Blueprint
