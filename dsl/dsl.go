@@ -26,8 +26,8 @@ const (
 	Stopped ServiceState = "stopped"
 )
 
-// ResourceMeta holds common metadata shared by all Opts structs.
-type ResourceMeta struct {
+// Meta holds common metadata shared by all Opts structs.
+type Meta struct {
 	DependsOn []string
 	Critical  bool
 	Noop      bool                 // skip Apply, only Check (per-resource dry-run)
@@ -39,24 +39,28 @@ type ResourceMeta struct {
 }
 
 type FileOpts struct {
-	Content string
-	Mode    os.FileMode
-	Owner   string
-	Group   string
-	Append  bool
-	Meta    ResourceMeta
+	Content      string
+	Mode         os.FileMode
+	Owner        string
+	Group        string
+	Append       bool
+	URL          string // when set, download from this URL instead of using Content
+	Checksum     string // expected SHA-256 hex digest (only with URL)
+	BlockName    string // when set, manages a tagged block within the file instead of owning the entire file
+	BlockComment string // comment prefix for block markers (default: "#")
+	Meta
 }
 
 type PackageOpts struct {
 	State ResourceState
-	Meta  ResourceMeta
+	Meta
 }
 
 type ServiceOpts struct {
 	State       ServiceState
 	Enable      bool
 	StartupType string // "auto", "delayed-auto", "manual", "disabled" (Windows SCM)
-	Meta        ResourceMeta
+	Meta
 }
 
 type ExecOpts struct {
@@ -67,7 +71,7 @@ type ExecOpts struct {
 	Env        []string
 	Retries    int
 	RetryDelay time.Duration
-	Meta       ResourceMeta
+	Meta
 }
 
 type UserOpts struct {
@@ -75,7 +79,7 @@ type UserOpts struct {
 	Shell  string
 	Home   string
 	System bool
-	Meta   ResourceMeta
+	Meta
 }
 
 type RegistryOpts struct {
@@ -83,27 +87,27 @@ type RegistryOpts struct {
 	Type  string
 	Data  any
 	State ResourceState // Present (default) or Absent
-	Meta  ResourceMeta
+	Meta
 }
 
 type SecurityPolicyOpts struct {
 	Category string // "password" or "lockout"
 	Key      string
 	Value    string
-	Meta     ResourceMeta
+	Meta
 }
 
 type AuditPolicyOpts struct {
 	Subcategory string
 	Success     bool
 	Failure     bool
-	Meta        ResourceMeta
+	Meta
 }
 
 type SysctlOpts struct {
 	Value   string
 	Persist bool
-	Meta    ResourceMeta
+	Meta
 }
 
 type PlistOpts struct {
@@ -111,7 +115,7 @@ type PlistOpts struct {
 	Value any
 	Type  string // "bool", "int", "float", "string"
 	Host  bool   // true = /Library/Preferences (system-wide), false = ~/Library/Preferences
-	Meta  ResourceMeta
+	Meta
 }
 
 type FirewallOpts struct {
@@ -122,12 +126,55 @@ type FirewallOpts struct {
 	Source    string // Optional source address/CIDR
 	Dest      string // Optional destination address/CIDR
 	State     ResourceState
-	Meta      ResourceMeta
+	Meta
 }
 
 type RebootOpts struct {
 	Reason  string
 	Message string // optional user-facing message shown in converge output before the reboot fires
 	Delay   time.Duration
-	Meta    ResourceMeta
+	Meta
+}
+
+type TemplateOpts struct {
+	Source string            // Go text/template source
+	Vars   map[string]string // template variables
+	Mode   os.FileMode
+	Owner  string
+	Group  string
+	Meta
+}
+
+type HostnameOpts struct {
+	Meta
+}
+
+type KernelModuleState string
+
+const (
+	ModuleLoaded      KernelModuleState = "loaded"
+	ModuleBlacklisted KernelModuleState = "blacklisted"
+)
+
+type KernelModuleOpts struct {
+	State KernelModuleState
+	Meta
+}
+
+type CronOpts struct {
+	Schedule string // cron expression (Linux/macOS) or trigger spec (Windows)
+	Command  string
+	User     string // user to run as
+	State    ResourceState
+	Meta
+}
+
+type RepositoryOpts struct {
+	URI          string
+	Distribution string // apt: distribution (e.g. "jammy")
+	Components   string // apt: components (e.g. "main")
+	GPGKey       string // GPG key URL
+	Enabled      bool
+	State        ResourceState
+	Meta
 }

@@ -20,6 +20,14 @@ import (
 	"github.com/TsekNet/converge/extensions"
 )
 
+// Opts configures a Reboot resource.
+type Opts struct {
+	Reason   string
+	Message  string // optional user-facing message shown in converge output before the reboot fires
+	Delay    time.Duration
+	Critical bool
+}
+
 // Reboot schedules an OS reboot and tracks whether it has occurred.
 // Check and Apply are implemented in platform-specific files.
 type Reboot struct {
@@ -37,12 +45,18 @@ type Reboot struct {
 // New returns a Reboot with the given name. Path separators are stripped
 // to prevent sentinel file path traversal; empty or dot-only names are
 // rejected by the DSL require() check.
-func New(name string) *Reboot {
+func New(name string, opts Opts) *Reboot {
 	name = filepath.Base(strings.ReplaceAll(name, `\`, "/"))
 	if name == "." {
 		name = ""
 	}
-	return &Reboot{Name: name}
+	return &Reboot{
+		Name:     name,
+		Reason:   opts.Reason,
+		Message:  opts.Message,
+		Delay:    opts.Delay,
+		Critical: opts.Critical,
+	}
 }
 
 // effectiveMessage returns Message if set, otherwise Reason.

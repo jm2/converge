@@ -2,6 +2,15 @@ package registry
 
 import "fmt"
 
+// Opts configures a Registry resource.
+type Opts struct {
+	Value    string
+	Type     string
+	Data     any
+	State    string // "present" (default) or "absent"
+	Critical bool
+}
+
 // Registry manages a single Windows registry value. Check/Apply use the native
 // golang.org/x/sys/windows/registry API (no reg.exe).
 type Registry struct {
@@ -13,8 +22,19 @@ type Registry struct {
 	Critical bool
 }
 
-func New(key string) *Registry {
-	return &Registry{Key: key, State: "present"}
+func New(key string, opts Opts) *Registry {
+	state := opts.State
+	if state == "" {
+		state = "present"
+	}
+	return &Registry{
+		Key:      key,
+		Value:    opts.Value,
+		Type:     opts.Type,
+		Data:     opts.Data,
+		State:    state,
+		Critical: opts.Critical,
+	}
 }
 
 func (r *Registry) ID() string       { return fmt.Sprintf("registry:%s\\%s", r.Key, r.Value) }

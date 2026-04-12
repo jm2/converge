@@ -18,7 +18,7 @@ func TestService_IDAndString(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := New(tt.name, "running", true, "systemd")
+			s := New(tt.name, Opts{State: "running", Enable: true, InitSystem: "systemd"})
 			if s.ID() != tt.wantID {
 				t.Errorf("ID() = %q, want %q", s.ID(), tt.wantID)
 			}
@@ -31,7 +31,7 @@ func TestService_IDAndString(t *testing.T) {
 
 func TestService_Check_UnsupportedInit(t *testing.T) {
 	ctx := context.Background()
-	s := New("test", "running", true, "runit")
+	s := New("test", Opts{State: "running", Enable: true, InitSystem: "runit"})
 
 	_, err := s.Check(ctx)
 	if err == nil {
@@ -41,7 +41,7 @@ func TestService_Check_UnsupportedInit(t *testing.T) {
 
 func TestService_Apply_UnsupportedInit(t *testing.T) {
 	ctx := context.Background()
-	s := New("test", "running", true, "runit")
+	s := New("test", Opts{State: "running", Enable: true, InitSystem: "runit"})
 
 	_, err := s.Apply(ctx)
 	if err == nil {
@@ -54,7 +54,7 @@ func TestService_CheckSystemd_LiveCron(t *testing.T) {
 		t.Skip("systemd tests only run on Linux")
 	}
 	ctx := context.Background()
-	s := New("cron", "running", true, "systemd")
+	s := New("cron", Opts{State: "running", Enable: true, InitSystem: "systemd"})
 	state, err := s.Check(ctx)
 	if err != nil {
 		t.Skipf("systemctl not available or cron not present: %v", err)
@@ -67,7 +67,7 @@ func TestService_CheckSystemd_NonexistentService(t *testing.T) {
 		t.Skip("systemd tests only run on Linux")
 	}
 	ctx := context.Background()
-	s := New("converge-definitely-not-real-12345", "running", true, "systemd")
+	s := New("converge-definitely-not-real-12345", Opts{State: "running", Enable: true, InitSystem: "systemd"})
 	state, err := s.Check(ctx)
 	if err != nil {
 		t.Skipf("systemctl not available: %v", err)
@@ -82,7 +82,7 @@ func TestService_Check_Launchd(t *testing.T) {
 		t.Skip("launchd tests only run on macOS")
 	}
 	ctx := context.Background()
-	s := New("test", "running", true, "launchd")
+	s := New("test", Opts{State: "running", Enable: true, InitSystem: "launchd"})
 	state, err := s.Check(ctx)
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)
@@ -97,7 +97,7 @@ func TestService_Check_Windows(t *testing.T) {
 		t.Skip("windows SCM tests only run on Windows")
 	}
 	ctx := context.Background()
-	s := New("test", "running", true, "windows")
+	s := New("test", Opts{State: "running", Enable: true, InitSystem: "windows"})
 	state, err := s.Check(ctx)
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)
@@ -112,7 +112,7 @@ func TestService_CheckSystemd_StoppedService(t *testing.T) {
 		t.Skip("systemd tests only run on Linux")
 	}
 	ctx := context.Background()
-	s := New("converge-definitely-not-real-12345", "stopped", false, "systemd")
+	s := New("converge-definitely-not-real-12345", Opts{State: "stopped", InitSystem: "systemd"})
 	state, err := s.Check(ctx)
 	if err != nil {
 		t.Skipf("systemctl not available: %v", err)
@@ -123,18 +123,18 @@ func TestService_CheckSystemd_StoppedService(t *testing.T) {
 }
 
 func TestService_IsCritical(t *testing.T) {
-	s := New("sshd", "running", true, "systemd")
+	s := New("sshd", Opts{State: "running", Enable: true, InitSystem: "systemd"})
 	if s.IsCritical() {
 		t.Error("IsCritical() should be false by default")
 	}
-	s.Critical = true
-	if !s.IsCritical() {
+	s2 := New("sshd", Opts{State: "running", Enable: true, InitSystem: "systemd", Critical: true})
+	if !s2.IsCritical() {
 		t.Error("IsCritical() should be true when set")
 	}
 }
 
 func TestService_New(t *testing.T) {
-	s := New("nginx", "stopped", false, "systemd")
+	s := New("nginx", Opts{State: "stopped", InitSystem: "systemd"})
 	if s.Name != "nginx" {
 		t.Errorf("Name = %q, want %q", s.Name, "nginx")
 	}
@@ -150,8 +150,7 @@ func TestService_New(t *testing.T) {
 }
 
 func TestService_StartupType(t *testing.T) {
-	s := New("wuauserv", "running", true, "windows")
-	s.StartupType = "disabled"
+	s := New("wuauserv", Opts{State: "running", Enable: true, InitSystem: "windows", StartupType: "disabled"})
 	if s.StartupType != "disabled" {
 		t.Errorf("StartupType = %q, want %q", s.StartupType, "disabled")
 	}

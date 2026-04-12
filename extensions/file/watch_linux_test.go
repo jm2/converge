@@ -17,7 +17,7 @@ func TestWatch_DetectsModification(t *testing.T) {
 	path := filepath.Join(dir, "test.txt")
 	os.WriteFile(path, []byte("initial"), 0644)
 
-	f := New(path, "desired", 0644)
+	f := New(path, Opts{Content: "desired", Mode: 0644})
 	events := make(chan extensions.Event, 10)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -48,7 +48,7 @@ func TestWatch_DetectsCreation(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "newfile.txt")
 
-	f := New(path, "content", 0644)
+	f := New(path, Opts{Content: "content", Mode: 0644})
 	events := make(chan extensions.Event, 10)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -76,7 +76,7 @@ func TestWatch_CancelsCleanly(t *testing.T) {
 	path := filepath.Join(dir, "test.txt")
 	os.WriteFile(path, []byte("data"), 0644)
 
-	f := New(path, "data", 0644)
+	f := New(path, Opts{Content: "data", Mode: 0644})
 	events := make(chan extensions.Event, 10)
 
 	ctx, cancel := context.WithCancel(context.Background())

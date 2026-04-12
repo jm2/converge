@@ -15,7 +15,7 @@ Requires Go 1.26+. No other dependencies.
 | Directory | Visibility | Purpose |
 |-----------|-----------|---------|
 | [`dsl/`](dsl/) | Public | SDK for blueprint authors (Run, opts, enums). Platform-specific methods in build-tagged files. |
-| [`extensions/`](extensions/) | Public | OS interaction -- [file](extensions/file/), [pkg](extensions/pkg/), [service](extensions/service/), [exec](extensions/exec/), [user](extensions/user/), [registry](extensions/registry/), [secpol](extensions/secpol/), [auditpol](extensions/auditpol/), [sysctl](extensions/sysctl/), [plist](extensions/plist/) |
+| [`extensions/`](extensions/) | Public | OS interaction: one subdirectory per resource type (see directory for full list) |
 | [`blueprints/`](blueprints/) | Public | Built-in blueprints including [CIS benchmarks](blueprints/cis/) |
 | [`internal/`](internal/) | Private | [Engine](internal/engine/), [output](internal/output/), [platform detection](internal/platform/), [logging](internal/logging/) |
 | [`cmd/converge/`](cmd/converge/) | Binary | Cobra CLI entry point with build-tagged blueprint registration |

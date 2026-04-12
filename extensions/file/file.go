@@ -2,41 +2,178 @@ package file
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/TsekNet/converge/extensions"
 )
 
+// maxDownloadSize caps remote file downloads to prevent OOM from malicious servers.
+const maxDownloadSize = 512 << 20 // 512 MiB
+
+// httpClient is a shared client with a sane timeout for remote downloads.
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
 // File manages content, permissions, and ownership of a file on disk.
+//
+// Modes of operation (mutually exclusive, determined by which fields are set):
+//   - Content set: write literal content (or append if Append is true)
+//   - URL set: download from URL with optional SHA-256 Checksum verification
+//   - BlockName set: manage a tagged block within an existing file
 type File struct {
-	Path    string
-	Content string
-	Mode    fs.FileMode
-	Owner   string
-	Group   string
-	Append  bool
-	Critical bool
+	Path         string
+	Content      string
+	Mode         fs.FileMode
+	Owner        string
+	Group        string
+	Append       bool
+	URL          string // when set, download from this URL instead of using Content
+	Checksum     string // expected SHA-256 hex digest (required with URL)
+	BlockName    string // when set, manages a tagged block instead of the entire file
+	BlockComment string // comment prefix for block markers (default: "#")
+	State        string // "present" or "absent" (only for block mode)
+	Critical     bool
+	FS           extensions.FS // nil uses the real OS filesystem
 }
 
-func New(path string, content string, mode fs.FileMode) *File {
-	return &File{Path: path, Content: content, Mode: mode}
+// Opts holds all configurable fields for a File resource.
+type Opts struct {
+	Content      string
+	Mode         fs.FileMode
+	Owner        string
+	Group        string
+	Append       bool
+	URL          string // when set, download from this URL instead of using Content
+	Checksum     string // expected SHA-256 hex digest (required with URL)
+	BlockName    string // when set, manages a tagged block instead of the entire file
+	BlockComment string // comment prefix for block markers (default: "#")
+	State        string // "present" or "absent" (only for block mode)
+	Critical     bool
+	FS           extensions.FS // inject a mock for testing
 }
 
-func (f *File) ID() string       { return fmt.Sprintf("file:%s", f.Path) }
-func (f *File) String() string   { return fmt.Sprintf("File %s", f.Path) }
+func New(path string, opts Opts) *File {
+	comment := opts.BlockComment
+	if opts.BlockName != "" && comment == "" {
+		comment = "#"
+	}
+	state := opts.State
+	if opts.BlockName != "" && state == "" {
+		state = "present"
+	}
+	return &File{
+		Path:         path,
+		Content:      opts.Content,
+		Mode:         opts.Mode,
+		Owner:        opts.Owner,
+		Group:        opts.Group,
+		Append:       opts.Append,
+		URL:          opts.URL,
+		Checksum:     opts.Checksum,
+		BlockName:    opts.BlockName,
+		BlockComment: comment,
+		State:        state,
+		Critical:     opts.Critical,
+		FS:           opts.FS,
+	}
+}
+
+func (f *File) ID() string {
+	if f.BlockName != "" {
+		return fmt.Sprintf("file:%s[%s]", f.Path, f.BlockName)
+	}
+	return fmt.Sprintf("file:%s", f.Path)
+}
+
+func (f *File) String() string {
+	if f.BlockName != "" {
+		return fmt.Sprintf("File %s [%s]", f.Path, f.BlockName)
+	}
+	return fmt.Sprintf("File %s", f.Path)
+}
+
 func (f *File) IsCritical() bool { return f.Critical }
 
-func (f *File) Check(_ context.Context) (*extensions.State, error) {
+func (f *File) fsys() extensions.FS { return extensions.RealFS(f.FS) }
+
+// isNotExist checks for file-not-found using errors.Is(fs.ErrNotExist),
+// which works with both real OS errors and mock FS implementations.
+func isNotExist(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || os.IsNotExist(err)
+}
+
+// mode returns the active mode: "block", "remote", or "content".
+// Returns an error if multiple mutually exclusive fields are set.
+func (f *File) mode() (string, error) {
+	count := 0
+	active := "content"
+	if f.URL != "" {
+		count++
+		active = "remote"
+	}
+	if f.BlockName != "" {
+		count++
+		active = "block"
+	}
+	if count > 1 {
+		return "", fmt.Errorf("file %s: URL and BlockName are mutually exclusive", f.Path)
+	}
+	return active, nil
+}
+
+func (f *File) Check(ctx context.Context) (*extensions.State, error) {
+	m, err := f.mode()
+	if err != nil {
+		return nil, err
+	}
+	switch m {
+	case "block":
+		return f.checkBlock()
+	case "remote":
+		if f.Checksum == "" {
+			return nil, fmt.Errorf("file %s: Checksum is required when URL is set", f.Path)
+		}
+		return f.checkRemote()
+	default:
+		return f.checkFull()
+	}
+}
+
+func (f *File) Apply(ctx context.Context) (*extensions.Result, error) {
+	m, err := f.mode()
+	if err != nil {
+		return nil, err
+	}
+	switch m {
+	case "block":
+		return f.applyBlock()
+	case "remote":
+		if f.Checksum == "" {
+			return nil, fmt.Errorf("file %s: Checksum is required when URL is set", f.Path)
+		}
+		return f.applyRemote(ctx)
+	default:
+		return f.applyFull()
+	}
+}
+
+// checkFull compares the entire file content against desired state.
+func (f *File) checkFull() (*extensions.State, error) {
 	absPath, err := filepath.Abs(f.Path)
 	if err != nil {
 		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
 	}
-	info, err := os.Stat(absPath)
-	if os.IsNotExist(err) {
+	info, err := f.fsys().Stat(absPath)
+	if isNotExist(err) {
 		changes := []extensions.Change{
 			{Property: "state", To: "create", Action: "add"},
 			{Property: "content", To: summarizeContent(f.Content), Action: "add"},
@@ -55,7 +192,7 @@ func (f *File) Check(_ context.Context) (*extensions.State, error) {
 	var changes []extensions.Change
 
 	if f.Content != "" && !f.Append {
-		existing, err := os.ReadFile(absPath)
+		existing, err := f.fsys().ReadFile(absPath)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", absPath, err)
 		}
@@ -76,40 +213,350 @@ func (f *File) Check(_ context.Context) (*extensions.State, error) {
 	return &extensions.State{InSync: len(changes) == 0, Changes: changes}, nil
 }
 
-func (f *File) Apply(_ context.Context) (*extensions.Result, error) {
+// applyFull writes the entire file content.
+func (f *File) applyFull() (*extensions.Result, error) {
 	dir := filepath.Dir(f.Path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := f.fsys().MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 
 	if f.Content != "" {
-		flag := os.O_WRONLY | os.O_CREATE
+		var content string
 		if f.Append {
-			flag |= os.O_APPEND
+			existing, err := f.fsys().ReadFile(f.Path)
+			if err != nil && !isNotExist(err) {
+				return nil, fmt.Errorf("read %s: %w", f.Path, err)
+			}
+			content = string(existing) + f.Content
 		} else {
-			flag |= os.O_TRUNC
+			content = f.Content
 		}
-		file, err := os.OpenFile(f.Path, flag, 0644)
-		if err != nil {
-			return nil, fmt.Errorf("open %s: %w", f.Path, err)
+
+		perm := f.Mode
+		if perm == 0 {
+			perm = 0644
 		}
-		_, writeErr := file.WriteString(f.Content)
-		closeErr := file.Close()
-		if writeErr != nil {
-			return nil, fmt.Errorf("write %s: %w", f.Path, writeErr)
-		}
-		if closeErr != nil {
-			return nil, fmt.Errorf("close %s: %w", f.Path, closeErr)
+		if err := f.fsys().WriteFile(f.Path, []byte(content), perm); err != nil {
+			return nil, fmt.Errorf("write %s: %w", f.Path, err)
 		}
 	}
 
 	if f.Mode != 0 {
-		if err := os.Chmod(f.Path, f.Mode); err != nil {
+		if err := f.fsys().Chmod(f.Path, f.Mode); err != nil {
 			return nil, fmt.Errorf("chmod %s: %w", f.Path, err)
 		}
 	}
 
 	return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "Updated"}, nil
+}
+
+// --- Remote file (download URL to local path) ---
+
+// checkRemote verifies the local file exists and its checksum matches.
+// Checksum is required for URL mode (enforced in Check).
+func (f *File) checkRemote() (*extensions.State, error) {
+	absPath, err := filepath.Abs(f.Path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
+	}
+
+	info, err := f.fsys().Stat(absPath)
+	if isNotExist(err) {
+		return &extensions.State{
+			InSync:  false,
+			Changes: []extensions.Change{{Property: "state", To: "download from " + f.URL, Action: "add"}},
+		}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", absPath, err)
+	}
+
+	var changes []extensions.Change
+
+	actual, err := fsFileSHA256(f.fsys(), absPath)
+	if err != nil {
+		return nil, fmt.Errorf("checksum %s: %w", absPath, err)
+	}
+	if actual != f.Checksum {
+		changes = append(changes, extensions.Change{
+			Property: "sha256",
+			From:     actual[:min(12, len(actual))] + "...",
+			To:       f.Checksum[:min(12, len(f.Checksum))] + "...",
+			Action:   "modify",
+		})
+	}
+
+	if f.Mode != 0 && info.Mode().Perm() != f.Mode {
+		changes = append(changes, extensions.Change{
+			Property: "mode",
+			From:     fmt.Sprintf("%04o", info.Mode().Perm()),
+			To:       fmt.Sprintf("%04o", f.Mode),
+			Action:   "modify",
+		})
+	}
+
+	return &extensions.State{InSync: len(changes) == 0, Changes: changes}, nil
+}
+
+// applyRemote downloads the URL to the local path.
+func (f *File) applyRemote(ctx context.Context) (*extensions.Result, error) {
+	dir := filepath.Dir(f.Path)
+	if err := f.fsys().MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+
+	data, err := httpGet(ctx, f.URL)
+	if err != nil {
+		return nil, err
+	}
+
+	actual := sha256Hex(data)
+	if actual != f.Checksum {
+		return nil, fmt.Errorf("checksum mismatch for %s: got %s, want %s", f.Path, actual, f.Checksum)
+	}
+
+	perm := f.Mode
+	if perm == 0 {
+		perm = 0644
+	}
+	if err := f.fsys().WriteFile(f.Path, data, perm); err != nil {
+		return nil, fmt.Errorf("write %s: %w", f.Path, err)
+	}
+
+	if f.Mode != 0 {
+		if err := f.fsys().Chmod(f.Path, f.Mode); err != nil {
+			return nil, fmt.Errorf("chmod %s: %w", f.Path, err)
+		}
+	}
+
+	return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "downloaded"}, nil
+}
+
+func httpGet(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request for %s: %w", url, err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
+	}
+	limited := io.LimitReader(resp.Body, maxDownloadSize+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("read body %s: %w", url, err)
+	}
+	if int64(len(data)) > maxDownloadSize {
+		return nil, fmt.Errorf("download %s: response exceeds %d bytes", url, maxDownloadSize)
+	}
+	return data, nil
+}
+
+// fsFileSHA256 hashes a file through the FS abstraction.
+func fsFileSHA256(fsys extensions.FS, path string) (string, error) {
+	data, err := fsys.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return sha256Hex(data), nil
+}
+
+func sha256Hex(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
+
+// --- Block management (manages a tagged block within the file) ---
+
+func (f *File) beginMarker() string {
+	return fmt.Sprintf("%s BEGIN converge:%s", f.BlockComment, f.BlockName)
+}
+
+func (f *File) endMarker() string {
+	return fmt.Sprintf("%s END converge:%s", f.BlockComment, f.BlockName)
+}
+
+func (f *File) checkBlock() (*extensions.State, error) {
+	absPath, err := filepath.Abs(f.Path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
+	}
+
+	data, err := f.fsys().ReadFile(absPath)
+	if isNotExist(err) {
+		if f.State == "absent" {
+			return &extensions.State{InSync: true}, nil
+		}
+		return &extensions.State{
+			InSync:  false,
+			Changes: []extensions.Change{{Property: "block", To: f.BlockName, Action: "add"}},
+		}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", absPath, err)
+	}
+
+	existing, err := extractBlock(string(data), f.beginMarker(), f.endMarker())
+	if err != nil {
+		return nil, fmt.Errorf("block %s[%s]: %w", absPath, f.BlockName, err)
+	}
+
+	if f.State == "absent" {
+		if existing == "" {
+			return &extensions.State{InSync: true}, nil
+		}
+		return &extensions.State{
+			InSync:  false,
+			Changes: []extensions.Change{{Property: "block", From: f.BlockName, To: "", Action: "remove"}},
+		}, nil
+	}
+
+	if existing == f.Content {
+		return &extensions.State{InSync: true}, nil
+	}
+
+	action := "modify"
+	if existing == "" {
+		action = "add"
+	}
+	return &extensions.State{
+		InSync:  false,
+		Changes: []extensions.Change{{Property: "block", From: truncate(existing, 60), To: truncate(f.Content, 60), Action: action}},
+	}, nil
+}
+
+func (f *File) applyBlock() (*extensions.Result, error) {
+	absPath, err := filepath.Abs(f.Path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
+	}
+
+	data, err := f.fsys().ReadFile(absPath)
+	if isNotExist(err) && f.State == "absent" {
+		return &extensions.Result{Changed: false, Status: extensions.StatusOK, Message: "file absent"}, nil
+	}
+	if isNotExist(err) {
+		data = nil
+	} else if err != nil {
+		return nil, fmt.Errorf("read %s: %w", absPath, err)
+	}
+
+	var result string
+	if f.State == "absent" {
+		result = removeBlock(string(data), f.beginMarker(), f.endMarker())
+	} else {
+		block := f.beginMarker() + "\n" + f.Content + "\n" + f.endMarker()
+		result = upsertBlock(string(data), f.beginMarker(), f.endMarker(), block)
+	}
+
+	dir := filepath.Dir(absPath)
+	if err := f.fsys().MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	if err := f.fsys().WriteFile(absPath, []byte(result), 0644); err != nil {
+		return nil, fmt.Errorf("write %s: %w", absPath, err)
+	}
+
+	msg := "updated"
+	if f.State == "absent" {
+		msg = "removed"
+	}
+	return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: msg}, nil
+}
+
+// extractBlock returns the content between begin and end markers, or "" if not found.
+// Returns an error if the begin marker is found but the end marker is missing.
+func extractBlock(data, beginMarker, endMarker string) (string, error) {
+	lines := strings.Split(data, "\n")
+	var inside bool
+	var block []string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == beginMarker {
+			inside = true
+			continue
+		}
+		if trimmed == endMarker {
+			if !inside {
+				continue
+			}
+			inside = false
+			continue
+		}
+		if inside {
+			block = append(block, line)
+		}
+	}
+
+	if inside {
+		return "", fmt.Errorf("begin marker found but end marker missing")
+	}
+
+	if len(block) == 0 {
+		return "", nil
+	}
+	return strings.Join(block, "\n"), nil
+}
+
+func upsertBlock(data, beginMarker, endMarker, block string) string {
+	lines := strings.Split(data, "\n")
+	var result []string
+	var inside bool
+	var replaced bool
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == beginMarker {
+			inside = true
+			replaced = true
+			result = append(result, strings.Split(block, "\n")...)
+			continue
+		}
+		if trimmed == endMarker {
+			inside = false
+			continue
+		}
+		if !inside {
+			result = append(result, line)
+		}
+	}
+
+	if !replaced {
+		if len(data) > 0 && !strings.HasSuffix(data, "\n") {
+			result = append(result, "")
+		}
+		result = append(result, strings.Split(block, "\n")...)
+	}
+
+	return strings.Join(result, "\n")
+}
+
+func removeBlock(data, beginMarker, endMarker string) string {
+	lines := strings.Split(data, "\n")
+	var result []string
+	var inside bool
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == beginMarker {
+			inside = true
+			continue
+		}
+		if trimmed == endMarker {
+			inside = false
+			continue
+		}
+		if !inside {
+			result = append(result, line)
+		}
+	}
+
+	return strings.Join(result, "\n")
 }
 
 // diffContent produces a human-readable line-by-line diff, capped at 5 changes for readability.

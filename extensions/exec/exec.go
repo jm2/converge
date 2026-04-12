@@ -11,6 +11,18 @@ import (
 	"github.com/TsekNet/converge/extensions"
 )
 
+// Opts configures an Exec resource.
+type Opts struct {
+	Command    string
+	Args       []string
+	OnlyIf     string // if exit 0, skip Apply (guard command)
+	Dir        string
+	Env        []string
+	Retries    int
+	RetryDelay time.Duration
+	Critical   bool
+}
+
 // Exec runs an arbitrary command. Use OnlyIf as a guard: if the guard exits 0, the resource is already in sync.
 type Exec struct {
 	Name       string
@@ -24,8 +36,18 @@ type Exec struct {
 	Critical   bool
 }
 
-func New(name, command string, args ...string) *Exec {
-	return &Exec{Name: name, Command: command, Args: args}
+func New(name string, opts Opts) *Exec {
+	return &Exec{
+		Name:       name,
+		Command:    opts.Command,
+		Args:       opts.Args,
+		OnlyIf:     opts.OnlyIf,
+		Dir:        opts.Dir,
+		Env:        opts.Env,
+		Retries:    opts.Retries,
+		RetryDelay: opts.RetryDelay,
+		Critical:   opts.Critical,
+	}
 }
 
 func (e *Exec) ID() string       { return fmt.Sprintf("exec:%s", e.Name) }

@@ -243,7 +243,7 @@ func TestPackage_IsCritical(t *testing.T) {
 }
 
 func TestNew(t *testing.T) {
-	p := New("curl", "present", "apt")
+	p := New("curl", Opts{State: "present", ManagerName: "apt"})
 	if p.PkgName != "curl" {
 		t.Errorf("PkgName = %q, want %q", p.PkgName, "curl")
 	}
@@ -257,7 +257,7 @@ func TestNew(t *testing.T) {
 		t.Error("Manager should not be nil for apt")
 	}
 
-	p2 := New("curl", "absent", "nonexistent")
+	p2 := New("curl", Opts{State: "absent", ManagerName: "nonexistent"})
 	if p2.Manager != nil {
 		t.Error("Manager should be nil for unknown manager")
 	}

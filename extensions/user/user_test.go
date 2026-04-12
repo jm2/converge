@@ -17,7 +17,7 @@ func TestUser_IDAndString(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			u := New(tt.name, nil, "")
+			u := New(tt.name, Opts{})
 			if u.ID() != tt.wantID {
 				t.Errorf("ID() = %q, want %q", u.ID(), tt.wantID)
 			}
@@ -36,7 +36,7 @@ func TestUser_Check_ExistingUser(t *testing.T) {
 		t.Skip("cannot determine current user")
 	}
 
-	u := New(current.Username, nil, "")
+	u := New(current.Username, Opts{})
 	state, err := u.Check(ctx)
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)
@@ -49,7 +49,7 @@ func TestUser_Check_ExistingUser(t *testing.T) {
 func TestUser_Check_NonexistentUser(t *testing.T) {
 	ctx := context.Background()
 
-	u := New("converge-test-user-does-not-exist-xyz", []string{"sudo"}, "/bin/bash")
+	u := New("converge-test-user-does-not-exist-xyz", Opts{Groups: []string{"sudo"}, Shell: "/bin/bash"})
 	state, err := u.Check(ctx)
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)
@@ -79,7 +79,7 @@ func TestUser_Check_WithShell(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			u := New(current.Username, nil, tt.shell)
+			u := New(current.Username, Opts{Shell: tt.shell})
 			state, err := u.Check(ctx)
 			if err != nil {
 				t.Fatalf("Check() error = %v", err)
@@ -90,18 +90,18 @@ func TestUser_Check_WithShell(t *testing.T) {
 }
 
 func TestUser_IsCritical(t *testing.T) {
-	u := New("devuser", nil, "")
+	u := New("devuser", Opts{})
 	if u.IsCritical() {
 		t.Error("IsCritical() should be false by default")
 	}
-	u.Critical = true
-	if !u.IsCritical() {
+	u2 := New("devuser", Opts{Critical: true})
+	if !u2.IsCritical() {
 		t.Error("IsCritical() should be true when set")
 	}
 }
 
 func TestUser_New(t *testing.T) {
-	u := New("admin", []string{"sudo", "docker"}, "/bin/zsh")
+	u := New("admin", Opts{Groups: []string{"sudo", "docker"}, Shell: "/bin/zsh"})
 	if u.Name != "admin" {
 		t.Errorf("Name = %q, want %q", u.Name, "admin")
 	}
@@ -115,7 +115,7 @@ func TestUser_New(t *testing.T) {
 
 func TestUser_Apply_NonexistentUser(t *testing.T) {
 	ctx := context.Background()
-	u := New("converge-test-user-does-not-exist-xyz", []string{"sudo"}, "/bin/bash")
+	u := New("converge-test-user-does-not-exist-xyz", Opts{Groups: []string{"sudo"}, Shell: "/bin/bash"})
 	_, err := u.Apply(ctx)
 	if err == nil {
 		t.Log("Apply may succeed if running as root, or fail otherwise")

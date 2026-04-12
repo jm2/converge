@@ -8,10 +8,11 @@ import (
 )
 
 func newPlistExtension(domain string, opts PlistOpts) extensions.Extension {
-	p := extplist.New(domain, opts.Key)
-	p.Value = opts.Value
-	p.Type = opts.Type
-	p.Host = opts.Host
-	p.Critical = opts.Meta.Critical
-	return p
+	return extplist.New(domain, extplist.Opts{
+		Key:      opts.Key,
+		Value:    opts.Value,
+		Type:     opts.Type,
+		Host:     opts.Host,
+		Critical: opts.Critical,
+	})
 }

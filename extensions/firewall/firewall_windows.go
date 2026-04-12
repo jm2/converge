@@ -14,12 +14,12 @@ import (
 
 // NET_FW constants matching the Windows Firewall COM enums.
 const (
-	netFwIPProtocolTCP = 6
-	netFwIPProtocolUDP = 17
+	netFwIPProtocolTCP    = 6
+	netFwIPProtocolUDP    = 17
 	netFwRuleDirectionIn  = 1
 	netFwRuleDirectionOut = 2
-	netFwActionBlock = 0
-	netFwActionAllow = 1
+	netFwActionBlock      = 0
+	netFwActionAllow      = 1
 )
 
 var directionMap = map[string]int32{"inbound": netFwRuleDirectionIn, "outbound": netFwRuleDirectionOut}

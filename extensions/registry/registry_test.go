@@ -14,8 +14,7 @@ func TestRegistry_IDAndString(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.key, func(t *testing.T) {
-			r := New(tt.key)
-			r.Value = tt.value
+			r := New(tt.key, Opts{Value: tt.value})
 			if r.ID() != tt.wantID {
 				t.Errorf("ID() = %q, want %q", r.ID(), tt.wantID)
 			}
@@ -27,18 +26,18 @@ func TestRegistry_IDAndString(t *testing.T) {
 }
 
 func TestRegistry_IsCritical(t *testing.T) {
-	r := New(`HKLM\SOFTWARE\Test`)
+	r := New(`HKLM\SOFTWARE\Test`, Opts{})
 	if r.IsCritical() {
 		t.Error("IsCritical() should be false by default")
 	}
-	r.Critical = true
-	if !r.IsCritical() {
+	r2 := New(`HKLM\SOFTWARE\Test`, Opts{Critical: true})
+	if !r2.IsCritical() {
 		t.Error("IsCritical() should be true when set")
 	}
 }
 
 func TestRegistry_DefaultState(t *testing.T) {
-	r := New(`HKLM\SOFTWARE\Test`)
+	r := New(`HKLM\SOFTWARE\Test`, Opts{})
 	if r.State != "present" {
 		t.Errorf("default State = %q, want %q", r.State, "present")
 	}

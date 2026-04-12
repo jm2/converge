@@ -133,8 +133,8 @@ func (f *File) parseNotifications(buf []byte, absPath string, events chan<- exte
 			select {
 			case events <- extensions.Event{
 				ResourceID: f.ID(),
-				Kind: extensions.EventWatch, Detail: "ReadDirectoryChangesW",
-				Time:       time.Now(),
+				Kind:       extensions.EventWatch, Detail: "ReadDirectoryChangesW",
+				Time: time.Now(),
 			}:
 			case <-ctx.Done():
 				return

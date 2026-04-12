@@ -6,32 +6,32 @@ import (
 )
 
 func TestSysctl_ID(t *testing.T) {
-	s := New("net.ipv4.ip_forward", "0")
+	s := New("net.ipv4.ip_forward", Opts{Value: "0"})
 	if got := s.ID(); got != "sysctl:net.ipv4.ip_forward" {
 		t.Errorf("ID() = %q, want %q", got, "sysctl:net.ipv4.ip_forward")
 	}
 }
 
 func TestSysctl_String(t *testing.T) {
-	s := New("net.ipv4.ip_forward", "0")
+	s := New("net.ipv4.ip_forward", Opts{Value: "0"})
 	if got := s.String(); got != "Sysctl net.ipv4.ip_forward = 0" {
 		t.Errorf("String() = %q, want %q", got, "Sysctl net.ipv4.ip_forward = 0")
 	}
 }
 
 func TestSysctl_IsCritical(t *testing.T) {
-	s := New("net.ipv4.ip_forward", "0")
+	s := New("net.ipv4.ip_forward", Opts{Value: "0"})
 	if s.IsCritical() {
 		t.Error("IsCritical() should be false by default")
 	}
-	s.Critical = true
-	if !s.IsCritical() {
-		t.Error("IsCritical() should be true after setting")
+	s2 := New("net.ipv4.ip_forward", Opts{Value: "0", Critical: true})
+	if !s2.IsCritical() {
+		t.Error("IsCritical() should be true when set via Opts")
 	}
 }
 
 func TestSysctl_New_Defaults(t *testing.T) {
-	s := New("kernel.randomize_va_space", "2")
+	s := New("kernel.randomize_va_space", Opts{Value: "2", Persist: true})
 	if s.Key != "kernel.randomize_va_space" {
 		t.Errorf("Key = %q", s.Key)
 	}
@@ -39,7 +39,7 @@ func TestSysctl_New_Defaults(t *testing.T) {
 		t.Errorf("Value = %q", s.Value)
 	}
 	if !s.Persist {
-		t.Error("Persist should default to true")
+		t.Error("Persist should be true when set via Opts")
 	}
 }
 
@@ -48,7 +48,7 @@ func TestSysctl_Check_ReadOnly(t *testing.T) {
 		t.Skip("sysctl Check requires /proc/sys (linux only)")
 	}
 
-	s := New("kernel.ostype", "Linux")
+	s := New("kernel.ostype", Opts{Value: "Linux"})
 	state, err := s.Check(nil)
 	if err != nil {
 		t.Fatalf("Check() error: %v", err)
@@ -89,7 +89,7 @@ func TestSysctl_Check_Mismatch(t *testing.T) {
 		t.Skip("sysctl Check requires /proc/sys (linux only)")
 	}
 
-	s := New("kernel.ostype", "NotLinux")
+	s := New("kernel.ostype", Opts{Value: "NotLinux"})
 	state, err := s.Check(nil)
 	if err != nil {
 		t.Fatalf("Check() error: %v", err)
@@ -116,7 +116,7 @@ func TestSysctl_Check_NonexistentKey(t *testing.T) {
 		t.Skip("sysctl Check requires /proc/sys (linux only)")
 	}
 
-	s := New("nonexistent.fake.key", "x")
+	s := New("nonexistent.fake.key", Opts{Value: "x"})
 	_, err := s.Check(nil)
 	if err == nil {
 		t.Error("expected error for nonexistent sysctl key")

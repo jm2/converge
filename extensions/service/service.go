@@ -2,6 +2,15 @@ package service
 
 import "fmt"
 
+// Opts configures a Service resource.
+type Opts struct {
+	State       string // "running" or "stopped"
+	Enable      bool
+	StartupType string // "auto", "delayed-auto", "manual", "disabled" (Windows SCM)
+	InitSystem  string
+	Critical    bool
+}
+
 // Service manages a system service. Check/Apply are in platform-specific files
 // (systemd on Linux, SCM on Windows, launchd stub on macOS).
 type Service struct {
@@ -13,8 +22,15 @@ type Service struct {
 	Critical    bool
 }
 
-func New(name, state string, enable bool, initSystem string) *Service {
-	return &Service{Name: name, State: state, Enable: enable, InitSystem: initSystem}
+func New(name string, opts Opts) *Service {
+	return &Service{
+		Name:        name,
+		State:       opts.State,
+		Enable:      opts.Enable,
+		StartupType: opts.StartupType,
+		InitSystem:  opts.InitSystem,
+		Critical:    opts.Critical,
+	}
 }
 
 func (s *Service) ID() string       { return fmt.Sprintf("service:%s", s.Name) }

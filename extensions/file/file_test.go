@@ -5,23 +5,25 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/TsekNet/converge/internal/testutil"
 )
 
 func TestFile_Check(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name       string
-		setup      func(t *testing.T, dir string)
-		file       func(dir string) *File
-		wantSync   bool
+		name        string
+		setup       func(t *testing.T, dir string)
+		file        func(dir string) *File
+		wantSync    bool
 		wantChanges int
 	}{
 		{
 			"file does not exist",
 			func(t *testing.T, dir string) {},
 			func(dir string) *File {
-				return New(filepath.Join(dir, "new.txt"), "hello\n", 0644)
+				return New(filepath.Join(dir, "new.txt"), Opts{Content: "hello\n", Mode: 0644})
 			},
 			false, 3,
 		},
@@ -29,10 +31,12 @@ func TestFile_Check(t *testing.T) {
 			"file exists with correct content and mode",
 			func(t *testing.T, dir string) {
 				t.Helper()
-				os.WriteFile(filepath.Join(dir, "ok.txt"), []byte("hello\n"), 0644)
+				p := filepath.Join(dir, "ok.txt")
+				os.WriteFile(p, []byte("hello\n"), 0644)
+				os.Chmod(p, 0644)
 			},
 			func(dir string) *File {
-				return New(filepath.Join(dir, "ok.txt"), "hello\n", 0644)
+				return New(filepath.Join(dir, "ok.txt"), Opts{Content: "hello\n", Mode: 0644})
 			},
 			true, 0,
 		},
@@ -40,10 +44,12 @@ func TestFile_Check(t *testing.T) {
 			"file exists with wrong content",
 			func(t *testing.T, dir string) {
 				t.Helper()
-				os.WriteFile(filepath.Join(dir, "wrong.txt"), []byte("old\n"), 0644)
+				p := filepath.Join(dir, "wrong.txt")
+				os.WriteFile(p, []byte("old\n"), 0644)
+				os.Chmod(p, 0644)
 			},
 			func(dir string) *File {
-				return New(filepath.Join(dir, "wrong.txt"), "new\n", 0644)
+				return New(filepath.Join(dir, "wrong.txt"), Opts{Content: "new\n", Mode: 0644})
 			},
 			false, 1,
 		},
@@ -54,7 +60,7 @@ func TestFile_Check(t *testing.T) {
 				os.WriteFile(filepath.Join(dir, "mode.txt"), []byte("hello\n"), 0755)
 			},
 			func(dir string) *File {
-				return New(filepath.Join(dir, "mode.txt"), "hello\n", 0644)
+				return New(filepath.Join(dir, "mode.txt"), Opts{Content: "hello\n", Mode: 0644})
 			},
 			false, 1,
 		},
@@ -65,7 +71,7 @@ func TestFile_Check(t *testing.T) {
 				os.WriteFile(filepath.Join(dir, "both.txt"), []byte("old\n"), 0755)
 			},
 			func(dir string) *File {
-				return New(filepath.Join(dir, "both.txt"), "new\n", 0644)
+				return New(filepath.Join(dir, "both.txt"), Opts{Content: "new\n", Mode: 0644})
 			},
 			false, 2,
 		},
@@ -94,16 +100,16 @@ func TestFile_Apply(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name    string
-		setup   func(t *testing.T, dir string)
-		file    func(dir string) *File
-		verify  func(t *testing.T, dir string)
+		name   string
+		setup  func(t *testing.T, dir string)
+		file   func(dir string) *File
+		verify func(t *testing.T, dir string)
 	}{
 		{
 			"create new file",
 			func(t *testing.T, dir string) {},
 			func(dir string) *File {
-				return New(filepath.Join(dir, "new.txt"), "hello\n", 0644)
+				return New(filepath.Join(dir, "new.txt"), Opts{Content: "hello\n", Mode: 0644})
 			},
 			func(t *testing.T, dir string) {
 				t.Helper()
@@ -123,7 +129,7 @@ func TestFile_Apply(t *testing.T) {
 				os.WriteFile(filepath.Join(dir, "exist.txt"), []byte("old\n"), 0644)
 			},
 			func(dir string) *File {
-				return New(filepath.Join(dir, "exist.txt"), "new\n", 0644)
+				return New(filepath.Join(dir, "exist.txt"), Opts{Content: "new\n", Mode: 0644})
 			},
 			func(t *testing.T, dir string) {
 				t.Helper()
@@ -140,9 +146,7 @@ func TestFile_Apply(t *testing.T) {
 				os.WriteFile(filepath.Join(dir, "append.txt"), []byte("line1\n"), 0644)
 			},
 			func(dir string) *File {
-				f := New(filepath.Join(dir, "append.txt"), "line2\n", 0644)
-				f.Append = true
-				return f
+				return New(filepath.Join(dir, "append.txt"), Opts{Content: "line2\n", Mode: 0644, Append: true})
 			},
 			func(t *testing.T, dir string) {
 				t.Helper()
@@ -156,7 +160,7 @@ func TestFile_Apply(t *testing.T) {
 			"create nested directory",
 			func(t *testing.T, dir string) {},
 			func(dir string) *File {
-				return New(filepath.Join(dir, "sub", "deep", "file.txt"), "nested\n", 0644)
+				return New(filepath.Join(dir, "sub", "deep", "file.txt"), Opts{Content: "nested\n", Mode: 0644})
 			},
 			func(t *testing.T, dir string) {
 				t.Helper()
@@ -176,7 +180,7 @@ func TestFile_Apply(t *testing.T) {
 				os.WriteFile(filepath.Join(dir, "perm.txt"), []byte("x"), 0755)
 			},
 			func(dir string) *File {
-				return New(filepath.Join(dir, "perm.txt"), "x", 0600)
+				return New(filepath.Join(dir, "perm.txt"), Opts{Content: "x", Mode: 0600})
 			},
 			func(t *testing.T, dir string) {
 				t.Helper()
@@ -210,7 +214,7 @@ func TestFile_CheckThenApplyIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "idem.txt")
 
-	f := New(path, "converge\n", 0644)
+	f := New(path, Opts{Content: "converge\n", Mode: 0644})
 
 	state, _ := f.Check(ctx)
 	if state.InSync {
@@ -219,7 +223,7 @@ func TestFile_CheckThenApplyIdempotent(t *testing.T) {
 
 	f.Apply(ctx)
 
-	f2 := New(path, "converge\n", 0644)
+	f2 := New(path, Opts{Content: "converge\n", Mode: 0644})
 	state, _ = f2.Check(ctx)
 	if !state.InSync {
 		t.Errorf("should be in sync after Apply, changes: %+v", state.Changes)
@@ -228,16 +232,16 @@ func TestFile_CheckThenApplyIdempotent(t *testing.T) {
 
 func TestFile_IDAndString(t *testing.T) {
 	tests := []struct {
-		path     string
-		wantID   string
-		wantStr  string
+		path    string
+		wantID  string
+		wantStr string
 	}{
 		{"/etc/motd", "file:/etc/motd", "File /etc/motd"},
 		{"/tmp/test.txt", "file:/tmp/test.txt", "File /tmp/test.txt"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			f := New(tt.path, "", 0)
+			f := New(tt.path, Opts{})
 			if f.ID() != tt.wantID {
 				t.Errorf("ID() = %q, want %q", f.ID(), tt.wantID)
 			}
@@ -269,12 +273,81 @@ func TestTruncate(t *testing.T) {
 }
 
 func TestFile_IsCritical(t *testing.T) {
-	f := New("/tmp/test", "content", 0644)
+	f := New("/tmp/test", Opts{Content: "content", Mode: 0644})
 	if f.IsCritical() {
 		t.Error("IsCritical() should be false by default")
 	}
-	f.Critical = true
-	if !f.IsCritical() {
+	fc := New("/tmp/test", Opts{Content: "content", Mode: 0644, Critical: true})
+	if !fc.IsCritical() {
 		t.Error("IsCritical() should be true when set")
+	}
+}
+
+func TestFile_MapFS_CheckAndApply(t *testing.T) {
+	ctx := context.Background()
+	mfs := testutil.NewMapFS()
+
+	f := New("/etc/motd", Opts{Content: "hello\n", Mode: 0644, FS: mfs})
+
+	state, err := f.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if state.InSync {
+		t.Error("should not be in sync before Apply")
+	}
+
+	result, err := f.Apply(ctx)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if !result.Changed {
+		t.Error("Changed should be true")
+	}
+
+	data, ok := mfs.Get("/etc/motd")
+	if !ok {
+		t.Fatal("file should exist in MapFS after Apply")
+	}
+	if string(data) != "hello\n" {
+		t.Errorf("content = %q, want %q", data, "hello\n")
+	}
+
+	f2 := New("/etc/motd", Opts{Content: "hello\n", Mode: 0644, FS: mfs})
+	state, err = f2.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if !state.InSync {
+		t.Errorf("should be in sync after Apply, changes: %+v", state.Changes)
+	}
+}
+
+func TestFile_MapFS_Append(t *testing.T) {
+	ctx := context.Background()
+	mfs := testutil.NewMapFS()
+	mfs.Set("/etc/config", []byte("line1\n"), 0644)
+
+	f := New("/etc/config", Opts{Content: "line2\n", Mode: 0644, Append: true, FS: mfs})
+	f.Apply(ctx)
+
+	data, _ := mfs.Get("/etc/config")
+	if string(data) != "line1\nline2\n" {
+		t.Errorf("content = %q, want %q", data, "line1\nline2\n")
+	}
+}
+
+func TestFile_MapFS_ContentDrift(t *testing.T) {
+	ctx := context.Background()
+	mfs := testutil.NewMapFS()
+	mfs.Set("/etc/motd", []byte("old\n"), 0644)
+
+	f := New("/etc/motd", Opts{Content: "new\n", Mode: 0644, FS: mfs})
+	state, _ := f.Check(ctx)
+	if state.InSync {
+		t.Error("should detect content drift")
+	}
+	if len(state.Changes) == 0 {
+		t.Error("should report changes")
 	}
 }

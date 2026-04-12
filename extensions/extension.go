@@ -32,7 +32,7 @@ type Poller interface {
 	PollInterval() time.Duration
 }
 
-// Condition is optionally set on ResourceMeta to gate convergence on system
+// Condition is optionally set on Meta to gate convergence on system
 // state. The daemon skips the resource until Met returns true, then triggers
 // initial convergence. Conditions do not affect ongoing drift detection after
 // they are first satisfied.

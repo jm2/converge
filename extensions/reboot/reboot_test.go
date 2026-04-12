@@ -28,7 +28,7 @@ func TestNew_sanitizesName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
 			t.Parallel()
-			r := New(tt.input)
+			r := New(tt.input, Opts{})
 			if r.Name != tt.want {
 				t.Errorf("New(%q).Name = %q, want %q", tt.input, r.Name, tt.want)
 			}
@@ -38,7 +38,7 @@ func TestNew_sanitizesName(t *testing.T) {
 
 func TestReboot_ID(t *testing.T) {
 	t.Parallel()
-	r := New("kernel-update")
+	r := New("kernel-update", Opts{})
 	if got := r.ID(); got != "reboot:kernel-update" {
 		t.Errorf("ID() = %q, want %q", got, "reboot:kernel-update")
 	}
@@ -46,7 +46,7 @@ func TestReboot_ID(t *testing.T) {
 
 func TestReboot_String(t *testing.T) {
 	t.Parallel()
-	r := New("kernel-update")
+	r := New("kernel-update", Opts{})
 	if got := r.String(); got != "Reboot kernel-update" {
 		t.Errorf("String() = %q, want %q", got, "Reboot kernel-update")
 	}
@@ -54,12 +54,12 @@ func TestReboot_String(t *testing.T) {
 
 func TestReboot_IsCritical(t *testing.T) {
 	t.Parallel()
-	r := New("test")
+	r := New("test", Opts{})
 	if r.IsCritical() {
 		t.Error("default IsCritical() should be false")
 	}
-	r.Critical = true
-	if !r.IsCritical() {
+	r2 := New("test", Opts{Critical: true})
+	if !r2.IsCritical() {
 		t.Error("IsCritical() should be true after setting Critical")
 	}
 }
@@ -236,7 +236,7 @@ func TestCheckState(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "reboot-test.sentinel")
 
-			r := New("test")
+			r := New("test", Opts{})
 			r.sentinelOverride = path
 
 			if tt.sentinel != "" {
@@ -270,7 +270,7 @@ func TestRemoveSentinel(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		r := New("test")
+		r := New("test", Opts{})
 		r.sentinelOverride = path
 		if err := r.removeSentinel(); err != nil {
 			t.Fatalf("removeSentinel() error: %v", err)
@@ -282,7 +282,7 @@ func TestRemoveSentinel(t *testing.T) {
 
 	t.Run("no error for missing sentinel", func(t *testing.T) {
 		t.Parallel()
-		r := New("test")
+		r := New("test", Opts{})
 		r.sentinelOverride = filepath.Join(t.TempDir(), "nonexistent.sentinel")
 		if err := r.removeSentinel(); err != nil {
 			t.Errorf("removeSentinel() on missing file: %v", err)

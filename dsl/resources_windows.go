@@ -10,25 +10,33 @@ import (
 )
 
 func newRegistryExtension(key string, opts RegistryOpts) extensions.Extension {
-	r := extreg.New(key)
-	r.Value = opts.Value
-	r.Type = opts.Type
-	r.Data = opts.Data
-	r.Critical = opts.Meta.Critical
+	state := "present"
 	if opts.State == Absent {
-		r.State = "absent"
+		state = "absent"
 	}
-	return r
+	return extreg.New(key, extreg.Opts{
+		Value:    opts.Value,
+		Type:     opts.Type,
+		Data:     opts.Data,
+		State:    state,
+		Critical: opts.Critical,
+	})
 }
 
 func newSecurityPolicyExtension(_ string, opts SecurityPolicyOpts) extensions.Extension {
-	s := extsecpol.New(opts.Category, opts.Key, opts.Value)
-	s.Critical = opts.Meta.Critical
-	return s
+	return extsecpol.New("", extsecpol.Opts{
+		Category: opts.Category,
+		Key:      opts.Key,
+		Value:    opts.Value,
+		Critical: opts.Critical,
+	})
 }
 
 func newAuditPolicyExtension(_ string, opts AuditPolicyOpts) extensions.Extension {
-	a := extaudit.New(opts.Subcategory, opts.Success, opts.Failure)
-	a.Critical = opts.Meta.Critical
-	return a
+	return extaudit.New("", extaudit.Opts{
+		Subcategory: opts.Subcategory,
+		Success:     opts.Success,
+		Failure:     opts.Failure,
+		Critical:    opts.Critical,
+	})
 }

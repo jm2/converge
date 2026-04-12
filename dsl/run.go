@@ -5,11 +5,12 @@ import (
 	"fmt"
 
 	"github.com/TsekNet/converge/extensions"
+	extpkg "github.com/TsekNet/converge/extensions/pkg"
 	"github.com/TsekNet/converge/internal/graph"
 	"github.com/TsekNet/converge/internal/platform"
 )
 
-func toNodeMeta(m ResourceMeta) graph.NodeMeta {
+func toNodeMeta(m Meta) graph.NodeMeta {
 	return graph.NodeMeta{
 		Noop:      m.Noop,
 		Retry:     m.Retry,
@@ -37,7 +38,7 @@ func newRun(app *App) *Run {
 	}
 }
 
-func (r *Run) addResource(ext extensions.Extension, meta ResourceMeta) {
+func (r *Run) addResource(ext extensions.Extension, meta Meta) {
 	if err := r.graph.AddNode(ext); err != nil {
 		r.errs = append(r.errs, fmt.Errorf("%s: %v", ext.ID(), err))
 		return
@@ -160,4 +161,63 @@ func (r *Run) Firewall(name string, opts FirewallOpts) {
 		opts.Action = "allow"
 	}
 	r.addResource(newFirewallExtension(name, opts), opts.Meta)
+}
+
+func (r *Run) Template(path string, opts TemplateOpts) {
+	if !r.require("Template", "path", path) {
+		return
+	}
+	if !r.require("Template", "source", opts.Source) {
+		return
+	}
+	r.addResource(newTemplateExtension(path, opts), opts.Meta)
+}
+
+func (r *Run) Hostname(name string, opts HostnameOpts) {
+	if !r.require("Hostname", "name", name) {
+		return
+	}
+	r.addResource(newHostnameExtension(name, opts), opts.Meta)
+}
+
+func (r *Run) Cron(name string, opts CronOpts) {
+	if !r.require("Cron", "name", name) {
+		return
+	}
+	if !r.require("Cron", "schedule", opts.Schedule) {
+		return
+	}
+	if !r.require("Cron", "command", opts.Command) {
+		return
+	}
+	if opts.State == "" {
+		opts.State = Present
+	}
+	r.addResource(newCronExtension(name, opts), opts.Meta)
+}
+
+func (r *Run) Repository(name string, opts RepositoryOpts) {
+	if !r.require("Repository", "name", name) {
+		return
+	}
+	if !r.require("Repository", "uri", opts.URI) {
+		return
+	}
+	if opts.State == "" {
+		opts.State = Present
+	}
+	state := "present"
+	if opts.State == Absent {
+		state = "absent"
+	}
+	r.addResource(extpkg.NewRepository(name, extpkg.RepositoryOpts{
+		URI:          opts.URI,
+		Distribution: opts.Distribution,
+		Components:   opts.Components,
+		GPGKey:       opts.GPGKey,
+		Enabled:      opts.Enabled,
+		State:        state,
+		ManagerName:  r.platform.PkgManager,
+		Critical:     opts.Critical,
+	}), opts.Meta)
 }

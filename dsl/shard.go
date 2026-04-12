@@ -15,9 +15,9 @@ var (
 // knownPlaceholders are serial strings commonly returned by VMs and
 // bare-metal machines that lack a real serial number.
 var knownPlaceholders = map[string]bool{
-	"":                        true,
-	"0":                       true,
-	"not specified":           true,
+	"":                       true,
+	"0":                      true,
+	"not specified":          true,
 	"to be filled by o.e.m.": true,
 	"default string":         true,
 	"none":                   true,

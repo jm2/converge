@@ -42,8 +42,8 @@ func cisSysctl(r *dsl.Run) {
 		key, value string
 	}
 	params := []param{
-		{"kernel.randomize_va_space", "2"},           // ASLR: full randomization
-		{"kernel.yama.ptrace_scope", "1"},            // restrict ptrace to parent processes
+		{"kernel.randomize_va_space", "2"}, // ASLR: full randomization
+		{"kernel.yama.ptrace_scope", "1"},  // restrict ptrace to parent processes
 		{"net.ipv4.ip_forward", "0"},
 		{"net.ipv4.conf.all.send_redirects", "0"},
 		{"net.ipv4.conf.default.send_redirects", "0"},
@@ -59,7 +59,7 @@ func cisSysctl(r *dsl.Run) {
 		{"net.ipv4.icmp_ignore_bogus_error_responses", "1"},
 		{"net.ipv4.conf.all.rp_filter", "1"},
 		{"net.ipv4.conf.default.rp_filter", "1"},
-		{"net.ipv4.tcp_syncookies", "1"},              // SYN flood protection
+		{"net.ipv4.tcp_syncookies", "1"}, // SYN flood protection
 		{"net.ipv6.conf.all.accept_ra", "0"},
 		{"net.ipv6.conf.default.accept_ra", "0"},
 		{"net.ipv6.conf.all.accept_redirects", "0"},
@@ -68,7 +68,7 @@ func cisSysctl(r *dsl.Run) {
 		{"net.ipv6.conf.default.accept_source_route", "0"},
 		{"net.ipv4.conf.all.forwarding", "0"},
 		{"net.ipv6.conf.all.forwarding", "0"},
-		{"fs.suid_dumpable", "0"},                     // prevent core dumps from SUID binaries
+		{"fs.suid_dumpable", "0"}, // prevent core dumps from SUID binaries
 		{"kernel.core_uses_pid", "1"},
 	}
 	for _, p := range params {

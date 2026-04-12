@@ -23,9 +23,9 @@ func TestStatus_String(t *testing.T) {
 
 func TestState(t *testing.T) {
 	tests := []struct {
-		name       string
-		state      State
-		wantSync   bool
+		name        string
+		state       State
+		wantSync    bool
 		wantChanges int
 	}{
 		{"in sync no changes", State{InSync: true}, true, 0},

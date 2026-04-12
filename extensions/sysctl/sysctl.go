@@ -11,8 +11,20 @@ type Sysctl struct {
 	Critical bool
 }
 
-func New(key, value string) *Sysctl {
-	return &Sysctl{Key: key, Value: value, Persist: true}
+// Opts holds configurable fields for a Sysctl resource.
+type Opts struct {
+	Value    string
+	Persist  bool
+	Critical bool
+}
+
+func New(key string, opts Opts) *Sysctl {
+	return &Sysctl{
+		Key:      key,
+		Value:    opts.Value,
+		Persist:  opts.Persist,
+		Critical: opts.Critical,
+	}
 }
 
 func (s *Sysctl) ID() string       { return fmt.Sprintf("sysctl:%s", s.Key) }

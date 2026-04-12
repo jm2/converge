@@ -2,7 +2,6 @@ package secpol
 
 import "testing"
 
-
 func TestSecurityPolicy_IDAndString(t *testing.T) {
 	tests := []struct {
 		category, key string
@@ -14,7 +13,7 @@ func TestSecurityPolicy_IDAndString(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.key, func(t *testing.T) {
-			s := New(tt.category, tt.key, "14")
+			s := New("", Opts{Category: tt.category, Key: tt.key, Value: "14"})
 			if s.ID() != tt.wantID {
 				t.Errorf("ID() = %q, want %q", s.ID(), tt.wantID)
 			}
@@ -26,18 +25,18 @@ func TestSecurityPolicy_IDAndString(t *testing.T) {
 }
 
 func TestSecurityPolicy_IsCritical(t *testing.T) {
-	s := New("password", "MinimumPasswordLength", "14")
+	s := New("", Opts{Category: "password", Key: "MinimumPasswordLength", Value: "14"})
 	if s.IsCritical() {
 		t.Error("IsCritical() should be false by default")
 	}
-	s.Critical = true
-	if !s.IsCritical() {
+	s2 := New("", Opts{Category: "password", Key: "MinimumPasswordLength", Value: "14", Critical: true})
+	if !s2.IsCritical() {
 		t.Error("IsCritical() should be true when set")
 	}
 }
 
 func TestSecurityPolicy_New(t *testing.T) {
-	s := New("lockout", "LockoutThreshold", "5")
+	s := New("", Opts{Category: "lockout", Key: "LockoutThreshold", Value: "5"})
 	if s.Category != "lockout" {
 		t.Errorf("Category = %q, want %q", s.Category, "lockout")
 	}
@@ -48,4 +47,3 @@ func TestSecurityPolicy_New(t *testing.T) {
 		t.Errorf("Value = %q, want %q", s.Value, "5")
 	}
 }
-

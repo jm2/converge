@@ -9,6 +9,15 @@ import (
 	"github.com/TsekNet/converge/extensions"
 )
 
+// Opts configures a User resource.
+type Opts struct {
+	Groups   []string
+	Shell    string
+	Home     string
+	System   bool
+	Critical bool
+}
+
 // User ensures a local user account exists with the specified groups and shell.
 // Apply is platform-specific (useradd on Linux, dscl on macOS, net user on Windows).
 type User struct {
@@ -20,8 +29,15 @@ type User struct {
 	Critical bool
 }
 
-func New(name string, groups []string, shell string) *User {
-	return &User{Name: name, Groups: groups, Shell: shell}
+func New(name string, opts Opts) *User {
+	return &User{
+		Name:     name,
+		Groups:   opts.Groups,
+		Shell:    opts.Shell,
+		Home:     opts.Home,
+		System:   opts.System,
+		Critical: opts.Critical,
+	}
 }
 
 func (u *User) ID() string       { return fmt.Sprintf("user:%s", u.Name) }

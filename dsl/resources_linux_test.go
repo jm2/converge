@@ -46,3 +46,54 @@ func TestRun_Sysctl_MissingValue(t *testing.T) {
 		t.Error("Sysctl() should set error on empty value")
 	}
 }
+
+func TestRun_KernelModule(t *testing.T) {
+	t.Parallel()
+
+	app := New()
+	run := newRun(app)
+	run.KernelModule("cramfs", KernelModuleOpts{State: ModuleBlacklisted})
+
+	if run.Err() != nil {
+		t.Fatalf("KernelModule() set error: %v", run.Err())
+	}
+
+	resources := run.Resources()
+	if len(resources) != 1 {
+		t.Fatalf("expected 1 resource, got %d", len(resources))
+	}
+	if got := resources[0].ID(); got != "kernelmodule:cramfs" {
+		t.Errorf("ID() = %q, want %q", got, "kernelmodule:cramfs")
+	}
+	if got := resources[0].String(); got != "KernelModule cramfs (blacklisted)" {
+		t.Errorf("String() = %q, want %q", got, "KernelModule cramfs (blacklisted)")
+	}
+}
+
+func TestRun_KernelModule_MissingModule(t *testing.T) {
+	t.Parallel()
+
+	run := newRun(New())
+	run.KernelModule("", KernelModuleOpts{State: ModuleLoaded})
+	if run.Err() == nil {
+		t.Error("KernelModule() should set error on empty module")
+	}
+}
+
+func TestRun_KernelModule_DefaultState(t *testing.T) {
+	t.Parallel()
+
+	run := newRun(New())
+	run.KernelModule("ext4", KernelModuleOpts{})
+
+	if run.Err() != nil {
+		t.Fatalf("KernelModule() set error: %v", run.Err())
+	}
+	resources := run.Resources()
+	if len(resources) != 1 {
+		t.Fatalf("expected 1 resource, got %d", len(resources))
+	}
+	if got := resources[0].String(); got != "KernelModule ext4 (loaded)" {
+		t.Errorf("String() = %q, want %q (default state should be loaded)", got, "KernelModule ext4 (loaded)")
+	}
+}

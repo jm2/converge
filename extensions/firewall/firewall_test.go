@@ -19,7 +19,7 @@ func TestFirewall_ID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			f := New(tt.name, 22, "tcp", "inbound", "allow")
+			f := New(tt.name, Opts{Port: 22, Protocol: "tcp", Direction: "inbound", Action: "allow"})
 			if got := f.ID(); got != tt.want {
 				t.Errorf("ID() = %q, want %q", got, tt.want)
 			}
@@ -44,7 +44,7 @@ func TestFirewall_String(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			f := New(tt.name, tt.port, tt.protocol, "inbound", tt.action)
+			f := New(tt.name, Opts{Port: tt.port, Protocol: tt.protocol, Direction: "inbound", Action: tt.action})
 			if got := f.String(); got != tt.want {
 				t.Errorf("String() = %q, want %q", got, tt.want)
 			}
@@ -55,12 +55,12 @@ func TestFirewall_String(t *testing.T) {
 func TestFirewall_IsCritical(t *testing.T) {
 	t.Parallel()
 
-	f := New("test", 22, "tcp", "inbound", "allow")
+	f := New("test", Opts{Port: 22, Protocol: "tcp", Direction: "inbound", Action: "allow"})
 	if f.IsCritical() {
 		t.Error("IsCritical() should be false by default")
 	}
-	f.Critical = true
-	if !f.IsCritical() {
+	f2 := New("test", Opts{Port: 22, Protocol: "tcp", Direction: "inbound", Action: "allow", Critical: true})
+	if !f2.IsCritical() {
 		t.Error("IsCritical() should be true when set")
 	}
 }
@@ -82,7 +82,7 @@ func TestFirewall_New_Defaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			f := New(tt.name, tt.port, tt.protocol, tt.direction, tt.action)
+			f := New(tt.name, Opts{Port: tt.port, Protocol: tt.protocol, Direction: tt.direction, Action: tt.action})
 			if f.Name != tt.name {
 				t.Errorf("Name = %q, want %q", f.Name, tt.name)
 			}
@@ -167,7 +167,7 @@ func TestFirewall_New_PanicsOnInvalid(t *testing.T) {
 					t.Error("New() should panic on invalid input")
 				}
 			}()
-			New(tt.fwName, tt.port, tt.protocol, tt.direction, tt.action)
+			New(tt.fwName, Opts{Port: tt.port, Protocol: tt.protocol, Direction: tt.direction, Action: tt.action})
 		})
 	}
 }

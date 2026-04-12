@@ -44,17 +44,17 @@ func TestExec_Apply(t *testing.T) {
 	}{
 		{
 			"simple echo",
-			New("echo", "echo", "hello"),
+			New("echo", Opts{Command: "echo", Args: []string{"hello"}}),
 			false,
 		},
 		{
 			"command not found",
-			New("bad", "/nonexistent/binary"),
+			New("bad", Opts{Command: "/nonexistent/binary"}),
 			true,
 		},
 		{
 			"false command fails",
-			New("fail", "false"),
+			New("fail", Opts{Command: "false"}),
 			true,
 		},
 		{
@@ -109,7 +109,7 @@ func TestExec_IDAndString(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := New(tt.name, "echo")
+			e := New(tt.name, Opts{Command: "echo"})
 			if e.ID() != tt.wantID {
 				t.Errorf("ID() = %q, want %q", e.ID(), tt.wantID)
 			}
@@ -121,12 +121,12 @@ func TestExec_IDAndString(t *testing.T) {
 }
 
 func TestExec_IsCritical(t *testing.T) {
-	e := New("test", "echo")
+	e := New("test", Opts{Command: "echo"})
 	if e.IsCritical() {
 		t.Error("IsCritical() should be false by default")
 	}
-	e.Critical = true
-	if !e.IsCritical() {
+	e2 := New("test", Opts{Command: "echo", Critical: true})
+	if !e2.IsCritical() {
 		t.Error("IsCritical() should be true when set")
 	}
 }

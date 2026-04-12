@@ -270,7 +270,7 @@ flowchart TD
 
 **Key behaviors:**
 
-- **Condition gates.** Resources with a `Condition` set in `ResourceMeta` are skipped until the condition is met. The daemon waits using OS-native events (netlink, inotify, NotifyIpInterfaceChange, RegNotifyChangeKeyValue) and triggers initial convergence the moment the condition becomes true. See the `condition` package.
+- **Condition gates.** Resources with a `Condition` set in `Meta` are skipped until the condition is met. The daemon waits using OS-native events (netlink, inotify, NotifyIpInterfaceChange, RegNotifyChangeKeyValue) and triggers initial convergence the moment the condition becomes true. See the `condition` package.
 - **Event-driven, not polling.** Resources implementing `Watcher` (File via inotify, Service via dbus) block on OS-level events. Near-zero CPU at idle.
 - **DAG propagation.** When a resource changes, its downstream dependents in the DAG are automatically re-checked. This is what Chef, Puppet, and Ansible lack entirely.
 - **Polling fallback.** Resources without native OS events (Package, Exec) are polled at configurable intervals.

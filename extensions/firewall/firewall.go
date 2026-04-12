@@ -11,6 +11,18 @@ import (
 	"github.com/TsekNet/converge/extensions"
 )
 
+// Opts configures a Firewall resource.
+type Opts struct {
+	Port      int
+	Protocol  string // "tcp" or "udp".
+	Direction string // "inbound" or "outbound".
+	Action    string // "allow" or "block".
+	Source    string // Optional source IP or CIDR. Empty = any.
+	Dest      string // Optional destination IP or CIDR. Empty = any.
+	State     string // "present" (default) or "absent".
+	Critical  bool
+}
+
 // Firewall manages a single named firewall rule.
 type Firewall struct {
 	Name      string // Human-readable rule name (used as identifier).
@@ -32,14 +44,21 @@ var validDirections = map[string]bool{"inbound": true, "outbound": true}
 var validActions = map[string]bool{"allow": true, "block": true}
 var validStates = map[string]bool{"present": true, "absent": true}
 
-func New(name string, port int, protocol, direction, action string) *Firewall {
+func New(name string, opts Opts) *Firewall {
+	state := opts.State
+	if state == "" {
+		state = "present"
+	}
 	f := &Firewall{
 		Name:      name,
-		Port:      port,
-		Protocol:  protocol,
-		Direction: direction,
-		Action:    action,
-		State:     "present",
+		Port:      opts.Port,
+		Protocol:  opts.Protocol,
+		Direction: opts.Direction,
+		Action:    opts.Action,
+		Source:    opts.Source,
+		Dest:      opts.Dest,
+		State:     state,
+		Critical:  opts.Critical,
 	}
 	if err := f.Validate(); err != nil {
 		panic(fmt.Sprintf("converge: invalid Firewall: %v", err))
@@ -120,8 +139,10 @@ func checkResult(name string, exists, wantPresent bool) (*extensions.State, erro
 	}, nil
 }
 
-func (f *Firewall) ID() string       { return fmt.Sprintf("firewall:%s", f.Name) }
-func (f *Firewall) String() string   { return fmt.Sprintf("Firewall %s (%s/%d %s)", f.Name, f.Protocol, f.Port, f.Action) }
+func (f *Firewall) ID() string { return fmt.Sprintf("firewall:%s", f.Name) }
+func (f *Firewall) String() string {
+	return fmt.Sprintf("Firewall %s (%s/%d %s)", f.Name, f.Protocol, f.Port, f.Action)
+}
 func (f *Firewall) IsCritical() bool { return f.Critical }
 
 // resultChanged builds a success Result with the given message.

@@ -22,6 +22,13 @@ type BatchInstaller interface {
 	RemoveBatch(ctx context.Context, names []string) error
 }
 
+// Opts configures a Package resource.
+type Opts struct {
+	State       string // "present" or "absent"
+	ManagerName string
+	Critical    bool
+}
+
 type Package struct {
 	PkgName     string
 	State       string // "present" or "absent"
@@ -30,12 +37,13 @@ type Package struct {
 	Critical    bool
 }
 
-func New(name, state, managerName string) *Package {
+func New(name string, opts Opts) *Package {
 	return &Package{
 		PkgName:     name,
-		State:       state,
-		ManagerName: managerName,
-		Manager:     detectManager(managerName),
+		State:       opts.State,
+		ManagerName: opts.ManagerName,
+		Manager:     detectManager(opts.ManagerName),
+		Critical:    opts.Critical,
 	}
 }
 
@@ -116,6 +124,8 @@ func detectManager(name string) PackageManager {
 		return &pacmanManager{}
 	case "winget":
 		return &wingetManager{}
+	case "snap":
+		return &snapManager{}
 	default:
 		return nil
 	}

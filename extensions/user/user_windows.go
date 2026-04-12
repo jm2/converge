@@ -23,14 +23,14 @@ var (
 
 // USER_INFO_1 matches the Windows USER_INFO_1 structure.
 type userInfo1 struct {
-	Name     *uint16
-	Password *uint16
+	Name        *uint16
+	Password    *uint16
 	PasswordAge uint32
-	Priv     uint32
-	HomeDir  *uint16
-	Comment  *uint16
-	Flags    uint32
-	ScriptPath *uint16
+	Priv        uint32
+	HomeDir     *uint16
+	Comment     *uint16
+	Flags       uint32
+	ScriptPath  *uint16
 }
 
 // LOCALGROUP_MEMBERS_INFO_3 uses a domain\user string.
@@ -39,8 +39,8 @@ type localGroupMembersInfo3 struct {
 }
 
 const (
-	userPrivUser   = 1
-	ufScript       = 0x0001
+	userPrivUser    = 1
+	ufScript        = 0x0001
 	ufNormalAccount = 0x0200
 )
 

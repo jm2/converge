@@ -188,13 +188,13 @@ func Blueprint(r *dsl.Run) {
     r.Exec("db-migrate", dsl.ExecOpts{
         Command:   "/usr/bin/db-migrate",
         OnlyIf:    "test -f /var/lib/myapp/.migration-done",
-        Meta: dsl.ResourceMeta{DependsOn: []string{"package:postgresql"}},
+        Meta: dsl.Meta{DependsOn: []string{"package:postgresql"}},
     })
 
     r.Service("myapp", dsl.ServiceOpts{
         State:     dsl.Running,
         Enable:    true,
-        Meta: dsl.ResourceMeta{DependsOn: []string{"exec:db-migrate"}},
+        Meta: dsl.Meta{DependsOn: []string{"exec:db-migrate"}},
     })
 }
 ```
@@ -290,7 +290,7 @@ No containers, no VMs, no network calls.
 
 ## Resource Reference
 
-All option structs share these common fields via `dsl.ResourceMeta`:
+All option structs share these common fields via `dsl.Meta`:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -311,13 +311,13 @@ Use `DependsOn` for dependencies auto-edges cannot detect:
 ```go
 r.Exec("migrate", dsl.ExecOpts{
     Command:   "/usr/bin/db-migrate",
-    Meta: dsl.ResourceMeta{DependsOn: []string{"package:postgresql"}},
+    Meta: dsl.Meta{DependsOn: []string{"package:postgresql"}},
 })
 ```
 
 ### File
 
-Manage file content, permissions, and ownership.
+Manage file content, permissions, ownership, remote downloads, and tagged blocks within existing files. Three modes of operation, determined by which fields are set:
 
 ```go
 r.File(path string, opts dsl.FileOpts)
@@ -330,12 +330,16 @@ r.File(path string, opts dsl.FileOpts)
 | `Owner` | `string` | `""` | File owner (username). No-op if empty. |
 | `Group` | `string` | `""` | File group. No-op if empty. |
 | `Append` | `bool` | `false` | If `true`, appends `Content` instead of replacing. |
+| `URL` | `string` | `""` | When set, downloads from this URL instead of using `Content`. |
+| `Checksum` | `string` | `""` | Expected SHA-256 hex digest. Only used with `URL`. |
+| `BlockName` | `string` | `""` | When set, manages a tagged block within the file instead of owning the entire file. |
+| `BlockComment` | `string` | `"#"` | Comment prefix for block markers. Only used with `BlockName`. |
 
 **Platform behavior:** Full support on Linux/macOS. On Windows, `Mode`/`Owner`/`Group` are ignored.
 
 **Idempotency:** Compares content byte-for-byte and stat metadata. No write if current state matches.
 
-**Examples:**
+**Content mode** (default): write literal content or append.
 
 ```go
 // Linux: system banner
@@ -361,6 +365,31 @@ r.File(`C:\ProgramData\MyApp\config.json`, dsl.FileOpts{
 r.File("/etc/hosts", dsl.FileOpts{
     Content: "10.0.0.5 internal.example.com\n",
     Append:  true,
+})
+```
+
+**Remote download mode** (`URL` set): downloads a URL to a local path. Optional SHA-256 checksum verification: if the checksum mismatches after download, the file is removed and Apply fails.
+
+```go
+r.File("/opt/tools/binary", dsl.FileOpts{
+    URL:      "https://releases.example.com/v1.2/tool-linux-amd64",
+    Checksum: "e3b0c44298fc1c149afbf4c8996fb924...",
+    Mode:     0755,
+})
+```
+
+**Block mode** (`BlockName` set): manages a tagged block within an existing file, leaving surrounding content untouched. Blocks are delimited by sentinel markers:
+
+```
+# BEGIN converge:<name>
+<managed content>
+# END converge:<name>
+```
+
+```go
+r.File("/etc/hosts", dsl.FileOpts{
+    Content:   "10.0.0.1 api.internal\n10.0.0.2 db.internal",
+    BlockName: "internal-dns",
 })
 ```
 
@@ -904,11 +933,11 @@ r.Reboot("driver-install", dsl.RebootOpts{
     Reason:  "Kernel module requires reboot to activate",
     Message: "Rebooting to load newly installed driver.",
     Delay:   30 * time.Second,
-    Meta:    dsl.ResourceMeta{DependsOn: []string{"exec:install-driver"}},
+    Meta: dsl.Meta{DependsOn: []string{"exec:install-driver"}},
 })
 r.Exec("configure-driver", dsl.ExecOpts{
     Command: "/usr/local/bin/configure-driver",
-    Meta: dsl.ResourceMeta{
+    Meta: dsl.Meta{
         Condition: condition.FileExists("/dev/mydriver0"),
         DependsOn: []string{"reboot:driver-install"},
     },
@@ -928,11 +957,11 @@ r.Reboot("agent-install", dsl.RebootOpts{
     Reason:  "Agent installation requires reboot to complete service registration",
     Message: "This device will restart in 30 seconds to finish agent setup.",
     Delay:   30 * time.Second,
-    Meta:    dsl.ResourceMeta{DependsOn: []string{"exec:install-agent"}},
+    Meta: dsl.Meta{DependsOn: []string{"exec:install-agent"}},
 })
 r.Exec("configure-agent", dsl.ExecOpts{
     Command: `C:\Program Files\MyAgent\agent.exe --configure`,
-    Meta: dsl.ResourceMeta{
+    Meta: dsl.Meta{
         // Block until the agent's post-reboot registry key appears.
         Condition: condition.RegistryValueExists(
             `HKLM\SOFTWARE\MyOrg\Agent`,
@@ -940,6 +969,60 @@ r.Exec("configure-agent", dsl.ExecOpts{
         ),
         DependsOn: []string{"reboot:agent-install"},
     },
+})
+```
+
+### Template
+
+Renders a Go `text/template` to a file. Variables come from the `Vars` map. Missing keys are a build error (missingkey=error).
+
+```go
+r.Template("/etc/nginx/nginx.conf", dsl.TemplateOpts{
+    Source: "server {\n    listen {{ .Port }};\n    server_name {{ .Host }};\n}\n",
+    Vars:   map[string]string{"Port": "8080", "Host": "example.com"},
+    Mode:   0644,
+})
+```
+
+### Hostname
+
+Ensures the system hostname matches the desired value. Uses `sethostname(2)` on Linux/macOS and `SetComputerNameExW` on Windows.
+
+```go
+r.Hostname("web01.example.com", dsl.HostnameOpts{})
+```
+
+### KernelModule (Linux only)
+
+Loads or blacklists a kernel module. Blacklisted modules are unloaded and added to `/etc/modprobe.d/converge-blacklist.conf`. Requires `//go:build linux` on the blueprint file.
+
+```go
+r.KernelModule("cramfs", dsl.KernelModuleOpts{State: dsl.ModuleBlacklisted})
+r.KernelModule("vfat", dsl.KernelModuleOpts{State: dsl.ModuleLoaded})
+```
+
+### Cron
+
+Manages cron jobs on Linux/macOS (writes to `/etc/cron.d/`) and Windows Task Scheduler entries (via COM API). On Windows, uses the Task Scheduler 2.0 COM interface directly, no shell-outs.
+
+```go
+r.Cron("nightly-backup", dsl.CronOpts{
+    Schedule: "0 2 * * *",
+    Command:  "/usr/local/bin/backup.sh",
+    User:     "root",
+})
+```
+
+### Repository
+
+Manages package repository sources: APT sources in `/etc/apt/sources.list.d/` and DNF/YUM repos in `/etc/yum.repos.d/`.
+
+```go
+r.Repository("google-chrome", dsl.RepositoryOpts{
+    URI:          "https://dl.google.com/linux/chrome/deb/",
+    Distribution: "stable",
+    Components:   "main",
+    GPGKey:       "https://dl.google.com/linux/linux_signing_key.pub",
 })
 ```
 
@@ -1024,7 +1107,7 @@ import "github.com/TsekNet/converge/condition"
 ```go
 r.Firewall("allow-internal", dsl.FirewallOpts{
     Port: 8443, Protocol: "tcp", Action: "allow",
-    Meta: dsl.ResourceMeta{
+    Meta: dsl.Meta{
         // Only apply when tun0 (VPN) interface is up.
         Condition: condition.NetworkInterface("tun0"),
     },
@@ -1037,7 +1120,7 @@ r.Firewall("allow-internal", dsl.FirewallOpts{
 r.File("/mnt/nfs/config/app.conf", dsl.FileOpts{Content: appConfig})
 r.Service("app", dsl.ServiceOpts{
     State: dsl.Running,
-    Meta: dsl.ResourceMeta{
+    Meta: dsl.Meta{
         // Wait for NFS mount before managing the service.
         Condition: condition.MountPoint("/mnt/nfs"),
         DependsOn: []string{"file:/mnt/nfs/config/app.conf"},
@@ -1050,7 +1133,7 @@ r.Service("app", dsl.ServiceOpts{
 ```go
 r.Exec("enroll-cert", dsl.ExecOpts{
     Command: "/usr/local/bin/enroll",
-    Meta: dsl.ResourceMeta{
+    Meta: dsl.Meta{
         // Wait for the CA bundle to be placed by provisioning.
         Condition: condition.FileExists("/etc/ssl/ca-bundle.crt"),
     },
@@ -1063,7 +1146,7 @@ r.Exec("enroll-cert", dsl.ExecOpts{
 r.File("/etc/apt/apt.conf.d/99proxy", dsl.FileOpts{Content: proxyConf})
 r.Package("curl", dsl.PackageOpts{
     State: dsl.Present,
-    Meta: dsl.ResourceMeta{
+    Meta: dsl.Meta{
         // Only install packages once the proxy is reachable.
         Condition: condition.NetworkReachable("proxy.corp.example.com", 3128),
         DependsOn: []string{"file:/etc/apt/apt.conf.d/99proxy"},
@@ -1081,7 +1164,7 @@ Gate convergence on Windows registry state. Uses `RegNotifyChangeKeyValue` so no
 // Gate on key existence (any subkey or value creation under this path)
 r.Exec("post-install-step", dsl.ExecOpts{
     Command: `C:\Program Files\MyApp\setup.exe --post-install`,
-    Meta: dsl.ResourceMeta{
+    Meta: dsl.Meta{
         Condition: condition.RegistryKeyExists(`HKLM\SOFTWARE\MyOrg\MyApp`),
     },
 })
@@ -1089,7 +1172,7 @@ r.Exec("post-install-step", dsl.ExecOpts{
 // Gate on a specific value existing under a key
 r.File(`C:\ProgramData\MyApp\config.json`, dsl.FileOpts{
     Content: `{"mode": "managed"}`,
-    Meta: dsl.ResourceMeta{
+    Meta: dsl.Meta{
         Condition: condition.RegistryValueExists(
             `HKLM\SOFTWARE\MyOrg\MyApp`,
             "SetupComplete",
@@ -1100,7 +1183,7 @@ r.File(`C:\ProgramData\MyApp\config.json`, dsl.FileOpts{
 // Gate on a value equaling a specific string or integer
 r.Exec("activate-feature", dsl.ExecOpts{
     Command: `C:\Program Files\MyApp\activate.exe`,
-    Meta: dsl.ResourceMeta{
+    Meta: dsl.Meta{
         Condition: condition.RegistryValueEquals(
             `HKLM\SOFTWARE\MyOrg\MyApp`,
             "LicenseState",
@@ -1131,4 +1214,5 @@ If the target key does not yet exist, `Wait` walks up the key path to find the n
 | `condition.RegistryKeyExists(key)` | Windows | Registry key exists | RegNotifyChangeKeyValue on nearest existing ancestor |
 | `condition.RegistryValueExists(key, value)` | Windows | Named value exists under key | RegNotifyChangeKeyValue on nearest existing ancestor |
 | `condition.RegistryValueEquals(key, value, data)` | Windows | Named value's data equals the string form of data | RegNotifyChangeKeyValue on nearest existing ancestor |
+
 

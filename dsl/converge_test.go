@@ -54,6 +54,12 @@ func TestRun_ResourceIDs(t *testing.T) {
 	run.Exec("test", ExecOpts{Command: "echo hello"})
 	run.User("dev", UserOpts{Shell: "/bin/bash"})
 	run.Firewall("Allow SSH", FirewallOpts{Port: 22, Protocol: "tcp", Direction: "inbound", Action: "allow"})
+	run.Template("/etc/nginx.conf", TemplateOpts{Source: "server {{ .Host }}", Vars: map[string]string{"Host": "localhost"}})
+	run.File("/tmp/file.bin", FileOpts{URL: "https://example.com/file"})
+	run.Hostname("web01", HostnameOpts{})
+	run.Cron("backup", CronOpts{Schedule: "0 2 * * *", Command: "/usr/bin/backup.sh"})
+	run.File("/etc/hosts", FileOpts{Content: "127.0.0.1 myhost", BlockName: "dns"})
+	run.Repository("chrome", RepositoryOpts{URI: "https://dl.google.com/linux/chrome/deb/"})
 	tests := []struct {
 		index   int
 		wantID  string
@@ -65,6 +71,12 @@ func TestRun_ResourceIDs(t *testing.T) {
 		{3, "exec:test", "Exec test"},
 		{4, "user:dev", "User dev"},
 		{5, "firewall:Allow SSH", "Firewall Allow SSH (tcp/22 allow)"},
+		{6, "template:/etc/nginx.conf", "Template /etc/nginx.conf"},
+		{7, "file:/tmp/file.bin", "File /tmp/file.bin"},
+		{8, "hostname:web01", "Hostname web01"},
+		{9, "cron:backup", "Cron backup"},
+		{10, "file:/etc/hosts[dns]", "File /etc/hosts [dns]"},
+		{11, "repository:chrome", ""},
 	}
 
 	resources := run.Resources()
@@ -79,7 +91,7 @@ func TestRun_ResourceIDs(t *testing.T) {
 			if r.ID() != tt.wantID {
 				t.Errorf("ID() = %q, want %q", r.ID(), tt.wantID)
 			}
-			if r.String() != tt.wantStr {
+			if tt.wantStr != "" && r.String() != tt.wantStr {
 				t.Errorf("String() = %q, want %q", r.String(), tt.wantStr)
 			}
 		})
@@ -242,7 +254,7 @@ func TestRun_DependsOn_MissingDep(t *testing.T) {
 	run := newRun(New())
 	run.File("/etc/motd", FileOpts{
 		Content: "hello",
-		Meta:    ResourceMeta{DependsOn: []string{"package:nonexistent"}},
+		Meta:    Meta{DependsOn: []string{"package:nonexistent"}},
 	})
 
 	if run.Err() == nil {
@@ -260,7 +272,7 @@ func TestRun_DependsOn_Valid(t *testing.T) {
 	run.Package("nginx", PackageOpts{State: Present})
 	run.Service("nginx", ServiceOpts{
 		State: Running,
-		Meta:  ResourceMeta{DependsOn: []string{"package:nginx"}},
+		Meta:  Meta{DependsOn: []string{"package:nginx"}},
 	})
 
 	if run.Err() != nil {
@@ -282,6 +294,10 @@ func TestRun_EmptyName(t *testing.T) {
 		{"Service", func(r *Run) { r.Service("", ServiceOpts{State: Running}) }},
 		{"Exec", func(r *Run) { r.Exec("", ExecOpts{Command: "echo hi"}) }},
 		{"User", func(r *Run) { r.User("", UserOpts{Shell: "/bin/bash"}) }},
+		{"Template", func(r *Run) { r.Template("", TemplateOpts{Source: "x"}) }},
+		{"Hostname", func(r *Run) { r.Hostname("", HostnameOpts{}) }},
+		{"Cron", func(r *Run) { r.Cron("", CronOpts{Schedule: "* * * * *", Command: "echo"}) }},
+		{"Repository", func(r *Run) { r.Repository("", RepositoryOpts{URI: "https://x"}) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -322,4 +338,3 @@ func TestRun_Include_NoApp(t *testing.T) {
 		t.Errorf("error should mention no app context, got: %v", run.Err())
 	}
 }
-

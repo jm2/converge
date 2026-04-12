@@ -1,0 +1,157 @@
+// Package template manages files rendered from Go text/template strings.
+// The template is evaluated at Check time to produce the desired content,
+// then compared against the file on disk. Apply writes the rendered output.
+package template
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"text/template"
+
+	"github.com/TsekNet/converge/extensions"
+)
+
+// Template renders a Go text/template to a file and ensures the file
+// matches the rendered output. Variables are provided via the Vars map.
+type Template struct {
+	Path     string
+	Source   string            // Go text/template source
+	Vars     map[string]string // template variables
+	Mode     fs.FileMode
+	Owner    string
+	Group    string
+	Critical bool
+}
+
+// Opts holds configurable fields for a Template resource.
+type Opts struct {
+	Source   string            // Go text/template source
+	Vars     map[string]string // template variables
+	Mode     fs.FileMode
+	Owner    string
+	Group    string
+	Critical bool
+}
+
+// New creates a Template with required fields.
+func New(path string, opts Opts) *Template {
+	return &Template{
+		Path:     path,
+		Source:   opts.Source,
+		Vars:     opts.Vars,
+		Mode:     opts.Mode,
+		Owner:    opts.Owner,
+		Group:    opts.Group,
+		Critical: opts.Critical,
+	}
+}
+
+func (t *Template) ID() string       { return fmt.Sprintf("template:%s", t.Path) }
+func (t *Template) String() string   { return fmt.Sprintf("Template %s", t.Path) }
+func (t *Template) IsCritical() bool { return t.Critical }
+
+// render executes the template and returns the rendered bytes.
+func (t *Template) render() (string, error) {
+	tmpl, err := template.New(filepath.Base(t.Path)).Option("missingkey=error").Parse(t.Source)
+	if err != nil {
+		return "", fmt.Errorf("parse template %s: %w", t.Path, err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, t.Vars); err != nil {
+		return "", fmt.Errorf("execute template %s: %w", t.Path, err)
+	}
+	return buf.String(), nil
+}
+
+// Check compares the rendered template output against the file on disk.
+func (t *Template) Check(_ context.Context) (*extensions.State, error) {
+	rendered, err := t.render()
+	if err != nil {
+		return nil, err
+	}
+
+	absPath, err := filepath.Abs(t.Path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid path %q: %w", t.Path, err)
+	}
+
+	info, err := os.Stat(absPath)
+	if os.IsNotExist(err) {
+		return &extensions.State{
+			InSync: false,
+			Changes: []extensions.Change{
+				{Property: "state", To: "create", Action: "add"},
+				{Property: "content", To: truncate(rendered, 80), Action: "add"},
+			},
+		}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", absPath, err)
+	}
+
+	var changes []extensions.Change
+
+	existing, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", absPath, err)
+	}
+	if string(existing) != rendered {
+		changes = append(changes, extensions.Change{
+			Property: "content",
+			From:     truncate(string(existing), 80),
+			To:       truncate(rendered, 80),
+			Action:   "modify",
+		})
+	}
+
+	if t.Mode != 0 && info.Mode().Perm() != t.Mode {
+		changes = append(changes, extensions.Change{
+			Property: "mode",
+			From:     fmt.Sprintf("%04o", info.Mode().Perm()),
+			To:       fmt.Sprintf("%04o", t.Mode),
+			Action:   "modify",
+		})
+	}
+
+	return &extensions.State{InSync: len(changes) == 0, Changes: changes}, nil
+}
+
+// Apply writes the rendered template to disk.
+func (t *Template) Apply(_ context.Context) (*extensions.Result, error) {
+	rendered, err := t.render()
+	if err != nil {
+		return nil, err
+	}
+
+	dir := filepath.Dir(t.Path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+
+	perm := t.Mode
+	if perm == 0 {
+		perm = 0644
+	}
+	if err := os.WriteFile(t.Path, []byte(rendered), perm); err != nil {
+		return nil, fmt.Errorf("write %s: %w", t.Path, err)
+	}
+
+	if t.Mode != 0 {
+		if err := os.Chmod(t.Path, t.Mode); err != nil {
+			return nil, fmt.Errorf("chmod %s: %w", t.Path, err)
+		}
+	}
+
+	return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "rendered"}, nil
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
