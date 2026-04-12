@@ -23,7 +23,11 @@ func TestIsModuleLoaded(t *testing.T) {
 
 func TestIsModuleBlacklisted(t *testing.T) {
 	// Should be false for a nonexistent module with no blacklist file
-	if isModuleBlacklisted("nonexistent_fake_module_xyz") {
+	blacklisted, err := isModuleBlacklisted("nonexistent_fake_module_xyz")
+	if err != nil {
+		t.Fatalf("isModuleBlacklisted() error: %v", err)
+	}
+	if blacklisted {
 		t.Error("should not be blacklisted without a blacklist file")
 	}
 }

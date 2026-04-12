@@ -6,6 +6,7 @@ package kernelmodule
 
 import (
 	"fmt"
+	"regexp"
 )
 
 // StateType represents whether the module should be loaded or blacklisted.
@@ -36,6 +37,16 @@ func New(module string, opts Opts) *KernelModule {
 		State:    opts.State,
 		Critical: opts.Critical,
 	}
+}
+
+var validModuleName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// validate returns an error if the module name contains invalid characters.
+func (k *KernelModule) validate() error {
+	if !validModuleName.MatchString(k.Module) {
+		return fmt.Errorf("invalid module name %q: must match [a-zA-Z0-9_-]+", k.Module)
+	}
+	return nil
 }
 
 func (k *KernelModule) ID() string       { return fmt.Sprintf("kernelmodule:%s", k.Module) }

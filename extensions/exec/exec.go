@@ -99,17 +99,6 @@ func (e *Exec) ID() string       { return fmt.Sprintf("exec:%s", e.Name) }
 func (e *Exec) String() string   { return fmt.Sprintf("Exec %s", e.Name) }
 func (e *Exec) IsCritical() bool { return e.Critical }
 
-// resolvedShell returns the concrete shell name after resolving "auto".
-func (e *Exec) resolvedShell() string {
-	if e.Shell == ShellAuto {
-		if runtime.GOOS == "windows" {
-			return ShellPowerShell
-		}
-		return ShellBash
-	}
-	return e.Shell
-}
-
 // shellCmd builds an exec.Cmd for the given command string, respecting the
 // Shell setting. When Shell is empty, the command is split on whitespace
 // (for guards) or used directly with Args (for Apply).
@@ -122,11 +111,10 @@ func (e *Exec) shellCmd(ctx context.Context, command string) *exec.Cmd {
 		return exec.CommandContext(ctx, parts[0], parts[1:]...)
 	}
 
-	binary, params := e.resolveShell()
+	binary, params, shell := e.resolveShell()
 	args := make([]string, 0, len(params)+2)
 	args = append(args, params...)
 
-	shell := e.resolvedShell()
 	switch shell {
 	case ShellBash, ShellSh:
 		args = append(args, "-c", command)
@@ -140,13 +128,23 @@ func (e *Exec) shellCmd(ctx context.Context, command string) *exec.Cmd {
 	return exec.CommandContext(ctx, binary, args...)
 }
 
-// resolveShell returns the binary path and parameter flags for the configured shell.
-func (e *Exec) resolveShell() (binary string, params []string) {
-	if e.ShellParams != nil {
+// resolveShell returns the binary path, parameter flags, and resolved shell
+// name for the configured shell. The resolved name accounts for "auto"
+// expanding to the platform default.
+func (e *Exec) resolveShell() (binary string, params []string, shell string) {
+	if len(e.ShellParams) > 0 {
 		params = e.ShellParams
 	}
 
-	shell := e.resolvedShell()
+	shell = e.Shell
+	if shell == ShellAuto {
+		if runtime.GOOS == "windows" {
+			shell = ShellPowerShell
+		} else {
+			shell = ShellBash
+		}
+	}
+
 	switch shell {
 	case ShellPowerShell:
 		binary = defaultPowerShellPath
@@ -167,7 +165,7 @@ func (e *Exec) resolveShell() (binary string, params []string) {
 	default:
 		binary = shell // allow arbitrary shell path
 	}
-	return binary, params
+	return binary, params, shell
 }
 
 // applyCmd builds an exec.Cmd for the Apply command.

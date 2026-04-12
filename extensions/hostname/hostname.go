@@ -34,6 +34,19 @@ func (h *Hostname) ID() string       { return "hostname:" + h.Name }
 func (h *Hostname) String() string   { return "Hostname " + h.Name }
 func (h *Hostname) IsCritical() bool { return h.Critical }
 
+// alreadySet returns true if the current hostname already matches.
+// Also returns an error if the name is empty.
+func (h *Hostname) alreadySet() (bool, error) {
+	if h.Name == "" {
+		return false, fmt.Errorf("hostname: name must not be empty")
+	}
+	current, err := os.Hostname()
+	if err != nil {
+		return false, fmt.Errorf("read hostname: %w", err)
+	}
+	return current == h.Name, nil
+}
+
 // Check compares the current hostname to the desired value.
 func (h *Hostname) Check(_ context.Context) (*extensions.State, error) {
 	current, err := os.Hostname()

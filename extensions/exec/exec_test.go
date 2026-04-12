@@ -263,20 +263,24 @@ func TestResolveShell(t *testing.T) {
 	tests := []struct {
 		shell      string
 		wantBinary string
+		wantShell  string
 	}{
-		{ShellPowerShell, defaultPowerShellPath},
-		{ShellPwsh, "pwsh"},
-		{ShellCmd, `C:\Windows\System32\cmd.exe`},
-		{ShellBash, "/bin/bash"},
-		{ShellSh, "/bin/sh"},
-		{"/usr/local/bin/zsh", "/usr/local/bin/zsh"},
+		{ShellPowerShell, defaultPowerShellPath, ShellPowerShell},
+		{ShellPwsh, "pwsh", ShellPwsh},
+		{ShellCmd, `C:\Windows\System32\cmd.exe`, ShellCmd},
+		{ShellBash, "/bin/bash", ShellBash},
+		{ShellSh, "/bin/sh", ShellSh},
+		{"/usr/local/bin/zsh", "/usr/local/bin/zsh", "/usr/local/bin/zsh"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.shell, func(t *testing.T) {
 			e := &Exec{Shell: tt.shell}
-			binary, _ := e.resolveShell()
+			binary, _, shell := e.resolveShell()
 			if binary != tt.wantBinary {
 				t.Errorf("binary = %q, want %q", binary, tt.wantBinary)
+			}
+			if shell != tt.wantShell {
+				t.Errorf("shell = %q, want %q", shell, tt.wantShell)
 			}
 		})
 	}
@@ -287,26 +291,34 @@ func TestResolveShell_CustomParams(t *testing.T) {
 		Shell:       ShellPowerShell,
 		ShellParams: []string{"-ExecutionPolicy", "RemoteSigned"},
 	}
-	_, params := e.resolveShell()
+	_, params, _ := e.resolveShell()
 	if len(params) != 2 || params[0] != "-ExecutionPolicy" {
 		t.Errorf("params = %v, want custom params", params)
 	}
 }
 
-func TestResolvedShell_Auto(t *testing.T) {
+func TestResolveShell_Auto(t *testing.T) {
 	e := &Exec{Shell: ShellAuto}
-	got := e.resolvedShell()
+	_, _, got := e.resolveShell()
 	// On Linux (CI), auto resolves to bash
 	if got != ShellBash && got != ShellPowerShell {
-		t.Errorf("resolvedShell() = %q, want bash or powershell", got)
+		t.Errorf("resolveShell() shell = %q, want bash or powershell", got)
 	}
 }
 
 func TestResolveShell_DefaultPSParams(t *testing.T) {
 	e := &Exec{Shell: ShellPowerShell}
-	_, params := e.resolveShell()
+	_, params, _ := e.resolveShell()
 	if len(params) != len(defaultPSParams) {
 		t.Errorf("params = %v, want default PS params %v", params, defaultPSParams)
+	}
+}
+
+func TestResolveShell_EmptySliceGetsDefaults(t *testing.T) {
+	e := &Exec{Shell: ShellPowerShell, ShellParams: []string{}}
+	_, params, _ := e.resolveShell()
+	if len(params) != len(defaultPSParams) {
+		t.Errorf("empty ShellParams should get defaults, got %v", params)
 	}
 }
 

@@ -4,6 +4,28 @@ How to write, register, compose, and test Converge blueprints, plus a complete r
 
 For real-world blueprints, see the [blueprints/](../blueprints/) directory, including [CIS L1 benchmarks](../blueprints/cis/) for Windows, Ubuntu, and macOS.
 
+- [What Is a Blueprint](#what-is-a-blueprint)
+- [Writing a Blueprint](#writing-a-blueprint)
+- [Registering in main.go](#registering-in-maingo)
+- [Platform-Conditional Logic](#platform-conditional-logic)
+- [Explicit Dependencies with DependsOn](#explicit-dependencies-with-dependson)
+- [Daemon Mode (`converge serve`)](#daemon-mode-converge-serve)
+- [Blueprint Composition](#blueprint-composition)
+- [Testing Blueprints](#testing-blueprints)
+- [Resource Reference](#resource-reference)
+  - [File](#file) (content, remote download, block management)
+  - [Package](#package), [Service](#service), [Exec](#exec) (shell, PowerShell, bash)
+  - [User](#user), [Firewall](#firewall), [Reboot](#reboot)
+  - [Template](#template), [Hostname](#hostname), [Cron](#cron), [Repository](#repository)
+  - [KernelModule](#kernelmodule-linux-only), [Sysctl](#sysctl-linux-only)
+  - [Registry](#registry-windows-only), [SecurityPolicy](#securitypolicy-windows-only), [AuditPolicy](#auditpolicy-windows-only)
+  - [Plist](#plist-macos-only)
+  - [InShard](#inshard), [Secret / Encrypted Config](#secret--encrypted-config)
+- [Conditions](#conditions)
+  - [NetworkInterface](#networkinterface-vpn-gated-firewall-rules), [MountPoint](#mountpoint-nfs-backed-service)
+  - [FileExists](#fileexists-cert-enrollment-after-bootstrap), [NetworkReachable](#networkreachable-proxy-config-before-package-installs)
+  - [RegistryKey / RegistryValue](#registrykeyexists--registryvalueexists--registryvalueequals-windows-only)
+
 ---
 
 ## What Is a Blueprint

@@ -32,6 +32,10 @@ func (c *Cron) cronFilePath() string {
 
 // Check reads the cron.d file to determine if the task exists with correct content.
 func (c *Cron) Check(_ context.Context) (*extensions.State, error) {
+	if err := c.validate(); err != nil {
+		return nil, err
+	}
+
 	path := c.cronFilePath()
 	wantLine := c.cronLine()
 
@@ -79,6 +83,10 @@ func (c *Cron) Check(_ context.Context) (*extensions.State, error) {
 
 // Apply creates, updates, or removes the cron.d file.
 func (c *Cron) Apply(_ context.Context) (*extensions.Result, error) {
+	if err := c.validate(); err != nil {
+		return nil, err
+	}
+
 	path := c.cronFilePath()
 
 	if c.State == "absent" {

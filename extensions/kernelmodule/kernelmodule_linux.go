@@ -5,7 +5,9 @@ package kernelmodule
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,12 +23,19 @@ const (
 
 // Check reads /proc/modules for loaded state and /etc/modprobe.d/ for blacklist state.
 func (k *KernelModule) Check(_ context.Context) (*extensions.State, error) {
+	if err := k.validate(); err != nil {
+		return nil, err
+	}
+
 	loaded, err := isModuleLoaded(k.Module)
 	if err != nil {
 		return nil, fmt.Errorf("check module %s: %w", k.Module, err)
 	}
 
-	blacklisted := isModuleBlacklisted(k.Module)
+	blacklisted, err := isModuleBlacklisted(k.Module)
+	if err != nil {
+		return nil, fmt.Errorf("check blacklist %s: %w", k.Module, err)
+	}
 
 	switch k.State {
 	case Loaded:
@@ -70,12 +79,19 @@ func (k *KernelModule) Check(_ context.Context) (*extensions.State, error) {
 
 // Apply loads or blacklists the module.
 func (k *KernelModule) Apply(_ context.Context) (*extensions.Result, error) {
+	if err := k.validate(); err != nil {
+		return nil, err
+	}
+
 	switch k.State {
 	case Loaded:
 		if err := removeFromBlacklist(k.Module); err != nil {
 			return nil, fmt.Errorf("remove blacklist %s: %w", k.Module, err)
 		}
-		loaded, _ := isModuleLoaded(k.Module)
+		loaded, err := isModuleLoaded(k.Module)
+		if err != nil {
+			return nil, fmt.Errorf("check module %s: %w", k.Module, err)
+		}
 		if !loaded {
 			if err := loadModule(k.Module); err != nil {
 				return nil, fmt.Errorf("load module %s: %w", k.Module, err)
@@ -84,7 +100,10 @@ func (k *KernelModule) Apply(_ context.Context) (*extensions.Result, error) {
 		return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "loaded"}, nil
 
 	case Blacklisted:
-		loaded, _ := isModuleLoaded(k.Module)
+		loaded, err := isModuleLoaded(k.Module)
+		if err != nil {
+			return nil, fmt.Errorf("check module %s: %w", k.Module, err)
+		}
 		if loaded {
 			if err := unloadModule(k.Module); err != nil {
 				return nil, fmt.Errorf("unload module %s: %w", k.Module, err)
@@ -119,19 +138,22 @@ func isModuleLoaded(module string) (bool, error) {
 }
 
 // isModuleBlacklisted checks for a blacklist entry in /etc/modprobe.d/converge-blacklist.conf.
-func isModuleBlacklisted(module string) bool {
+func isModuleBlacklisted(module string) (bool, error) {
 	path := filepath.Join(modprobeDir, blacklistFile)
 	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
 	if err != nil {
-		return false
+		return false, fmt.Errorf("read %s: %w", path, err)
 	}
 	line := fmt.Sprintf("blacklist %s", module)
 	for _, l := range strings.Split(string(data), "\n") {
 		if strings.TrimSpace(l) == line {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // loadModule loads a kernel module using /sbin/modprobe via finit_module.
@@ -195,7 +217,7 @@ func addToBlacklist(module string) error {
 func removeFromBlacklist(module string) error {
 	path := filepath.Join(modprobeDir, blacklistFile)
 	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {

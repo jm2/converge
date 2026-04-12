@@ -93,11 +93,12 @@ func (r *Repository) repoContent() string {
 		} else {
 			fmt.Fprintln(&b, "enabled=0")
 		}
+		// Always enable GPG checking. When GPGKey is provided, include
+		// the gpgkey= line. Otherwise, the repo-level or system-level
+		// GPG keys must already be configured (e.g. rpm --import).
+		fmt.Fprintln(&b, "gpgcheck=1")
 		if r.GPGKey != "" {
-			fmt.Fprintln(&b, "gpgcheck=1")
 			fmt.Fprintf(&b, "gpgkey=%s\n", r.GPGKey)
-		} else {
-			fmt.Fprintln(&b, "gpgcheck=0")
 		}
 		return b.String()
 	default:

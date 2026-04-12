@@ -18,6 +18,14 @@ const sysSetHostname = 88
 
 // Apply sets the hostname via the sethostname(2) syscall on macOS.
 func (h *Hostname) Apply(_ context.Context) (*extensions.Result, error) {
+	match, err := h.alreadySet()
+	if err != nil {
+		return nil, err
+	}
+	if match {
+		return &extensions.Result{Changed: false, Status: extensions.StatusOK, Message: "already set"}, nil
+	}
+
 	name := []byte(h.Name)
 	_, _, errno := unix.Syscall(
 		sysSetHostname,
