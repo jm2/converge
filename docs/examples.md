@@ -497,9 +497,12 @@ r.Exec(name string, opts dsl.ExecOpts)
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `Command` | `string` | `""` | The command to execute. Required. |
-| `Args` | `[]string` | `nil` | Arguments passed to the command. |
-| `OnlyIf` | `string` | `""` | Guard command. If exits 0, `Command` is skipped (state already correct). |
+| `Command` | `string` | `""` | The command to execute (or script body when Shell is set). Required. |
+| `Args` | `[]string` | `nil` | Arguments passed to the command. Ignored when Shell is set. |
+| `OnlyIf` | `string` | `""` | Guard command. If exits 0 (or output matches OnlyIfMatch), `Command` is skipped. |
+| `OnlyIfMatch` | `string` | `""` | When set, guard compares trimmed stdout against this string instead of exit code. |
+| `Shell` | `string` | `""` | `"auto"` (bash on Linux/macOS, powershell on Windows), `"powershell"`, `"pwsh"`, `"cmd"`, `"bash"`, `"sh"`, or custom path. |
+| `ShellParams` | `[]string` | `nil` | When set, replaces the default shell flags. PowerShell default: `-NoProfile -NonInteractive -ExecutionPolicy Bypass`. |
 | `Retries` | `int` | `0` | Number of retry attempts on failure. |
 | `RetryDelay` | `time.Duration` | `0` | Delay between retries. |
 
@@ -534,6 +537,42 @@ r.Exec("download-agent", dsl.ExecOpts{
     OnlyIf:     "test -f /tmp/agent.tar.gz",
     Retries:    3,
     RetryDelay: 5 * time.Second,
+})
+
+// PowerShell: enable Windows feature (5.1, default path)
+r.Exec("enable-wsl", dsl.ExecOpts{
+    Shell:       "powershell",
+    Command:     "Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -NoRestart",
+    OnlyIf:      "(Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux).State",
+    OnlyIfMatch: "Enabled",
+})
+
+// PowerShell 7+: multi-line script
+r.Exec("configure-defender", dsl.ExecOpts{
+    Shell: "pwsh",
+    Command: `
+        $prefs = Get-MpPreference
+        if ($prefs.DisableRealtimeMonitoring) {
+            Set-MpPreference -DisableRealtimeMonitoring $false
+        }
+    `,
+    OnlyIf:      "(Get-MpPreference).DisableRealtimeMonitoring",
+    OnlyIfMatch: "False",
+})
+
+// PowerShell with custom parameters
+r.Exec("run-with-profile", dsl.ExecOpts{
+    Shell:       "powershell",
+    ShellParams: []string{"-ExecutionPolicy", "RemoteSigned"},
+    Command:     "Import-Module MyModule; Invoke-Setup",
+})
+
+// Bash: multi-line script with output-based guard
+r.Exec("set-timezone", dsl.ExecOpts{
+    Shell:       "bash",
+    Command:     "timedatectl set-timezone America/Los_Angeles",
+    OnlyIf:      "timedatectl show --property=Timezone --value",
+    OnlyIfMatch: "America/Los_Angeles",
 })
 ```
 

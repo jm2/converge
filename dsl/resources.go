@@ -49,14 +49,17 @@ func newServiceExtension(name string, opts ServiceOpts, initSystem string) exten
 
 func newExecExtension(name string, opts ExecOpts) extensions.Extension {
 	return extexec.New(name, extexec.Opts{
-		Command:    opts.Command,
-		Args:       opts.Args,
-		OnlyIf:     opts.OnlyIf,
-		Dir:        opts.Dir,
-		Env:        opts.Env,
-		Retries:    opts.Retries,
-		RetryDelay: opts.RetryDelay,
-		Critical:   opts.Critical,
+		Command:     opts.Command,
+		Args:        opts.Args,
+		OnlyIf:      opts.OnlyIf,
+		OnlyIfMatch: opts.OnlyIfMatch,
+		Shell:       opts.Shell,
+		ShellParams: opts.ShellParams,
+		Dir:         opts.Dir,
+		Env:         opts.Env,
+		Retries:     opts.Retries,
+		RetryDelay:  opts.RetryDelay,
+		Critical:    opts.Critical,
 	})
 }
 

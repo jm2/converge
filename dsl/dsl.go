@@ -64,13 +64,16 @@ type ServiceOpts struct {
 }
 
 type ExecOpts struct {
-	Command    string
-	Args       []string
-	OnlyIf     string
-	Dir        string
-	Env        []string
-	Retries    int
-	RetryDelay time.Duration
+	Command     string
+	Args        []string
+	OnlyIf      string
+	OnlyIfMatch string   // when set, OnlyIf compares trimmed stdout against this string
+	Shell       string   // "powershell", "pwsh", "bash", "sh", or "" (direct exec)
+	ShellParams []string // when set, replaces default shell flags
+	Dir         string
+	Env         []string
+	Retries     int
+	RetryDelay  time.Duration
 	Meta
 }
 
