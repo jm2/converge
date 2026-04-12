@@ -35,6 +35,13 @@ var defaultPSParams = []string{"-NoProfile", "-NonInteractive", "-ExecutionPolic
 // corrupts stdout parsing for OnlyIfMatch and adds latency.
 const psPrefix = "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; "
 
+// psSuffix is appended to every PowerShell -Command invocation.
+// Propagates $LASTEXITCODE from native executables (msiexec, reg.exe, etc.)
+// to the process exit code. Without this, powershell.exe exits 0 even when
+// the native exe fails. Only fires when $LASTEXITCODE is non-null (pure
+// cmdlet commands never set it).
+const psSuffix = "; if ($LASTEXITCODE) { exit $LASTEXITCODE }"
+
 // Opts configures an Exec resource.
 type Opts struct {
 	Command     string
@@ -127,7 +134,7 @@ func (e *Exec) shellCmd(ctx context.Context, command string) *exec.Cmd {
 		args = append(args, "/C", command)
 	default:
 		// PowerShell variants: wrap with error/progress preferences
-		args = append(args, "-Command", psPrefix+command)
+		args = append(args, "-Command", psPrefix+command+psSuffix)
 	}
 
 	return exec.CommandContext(ctx, binary, args...)
