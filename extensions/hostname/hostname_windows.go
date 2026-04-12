@@ -20,13 +20,19 @@ var (
 // Apply sets the Windows hostname via SetComputerNameExW.
 // A reboot is required for the change to take effect.
 func (h *Hostname) Apply(_ context.Context) (*extensions.Result, error) {
+	match, err := h.alreadySet()
+	if err != nil {
+		return nil, err
+	}
+	if match {
+		return &extensions.Result{Changed: false, Status: extensions.StatusOK, Message: "already set"}, nil
+	}
+
 	namePtr, err := windows.UTF16PtrFromString(h.Name)
 	if err != nil {
 		return nil, fmt.Errorf("encode hostname %q: %w", h.Name, err)
 	}
 
-	// SetComputerNameExW(ComputerNamePhysicalDnsHostname, lpBuffer)
-	// ComputerNamePhysicalDnsHostname = 5
 	ret, _, callErr := procSetComputerNameExW.Call(
 		windows.ComputerNamePhysicalDnsHostname,
 		uintptr(unsafe.Pointer(namePtr)),

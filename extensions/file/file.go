@@ -21,7 +21,18 @@ import (
 const maxDownloadSize = 512 << 20 // 512 MiB
 
 // httpClient is a shared client with a sane timeout for remote downloads.
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+var httpClient = &http.Client{
+	Timeout: 30 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return fmt.Errorf("too many redirects")
+		}
+		if req.URL.Host != via[0].URL.Host {
+			return fmt.Errorf("redirect to different host: %s", req.URL.Host)
+		}
+		return nil
+	},
+}
 
 // File manages content, permissions, and ownership of a file on disk.
 //
@@ -126,6 +137,9 @@ func (f *File) mode() (string, error) {
 	}
 	if count > 1 {
 		return "", fmt.Errorf("file %s: URL and BlockName are mutually exclusive", f.Path)
+	}
+	if f.URL != "" && f.Content != "" {
+		return "", fmt.Errorf("file %s: Content and URL are mutually exclusive", f.Path)
 	}
 	return active, nil
 }
@@ -277,7 +291,7 @@ func (f *File) checkRemote() (*extensions.State, error) {
 	if err != nil {
 		return nil, fmt.Errorf("checksum %s: %w", absPath, err)
 	}
-	if actual != f.Checksum {
+	if !strings.EqualFold(actual, f.Checksum) {
 		changes = append(changes, extensions.Change{
 			Property: "sha256",
 			From:     actual[:min(12, len(actual))] + "...",
@@ -311,7 +325,7 @@ func (f *File) applyRemote(ctx context.Context) (*extensions.Result, error) {
 	}
 
 	actual := sha256Hex(data)
-	if actual != f.Checksum {
+	if !strings.EqualFold(actual, f.Checksum) {
 		return nil, fmt.Errorf("checksum mismatch for %s: got %s, want %s", f.Path, actual, f.Checksum)
 	}
 
@@ -457,7 +471,11 @@ func (f *File) applyBlock() (*extensions.Result, error) {
 	if err := f.fsys().MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
-	if err := f.fsys().WriteFile(absPath, []byte(result), 0644); err != nil {
+	perm := f.Mode
+	if perm == 0 {
+		perm = 0644
+	}
+	if err := f.fsys().WriteFile(absPath, []byte(result), perm); err != nil {
 		return nil, fmt.Errorf("write %s: %w", absPath, err)
 	}
 
@@ -476,12 +494,11 @@ func extractBlock(data, beginMarker, endMarker string) (string, error) {
 	var block []string
 
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == beginMarker {
+		if line == beginMarker {
 			inside = true
 			continue
 		}
-		if trimmed == endMarker {
+		if line == endMarker {
 			if !inside {
 				continue
 			}
@@ -510,14 +527,13 @@ func upsertBlock(data, beginMarker, endMarker, block string) string {
 	var replaced bool
 
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == beginMarker {
+		if line == beginMarker {
 			inside = true
 			replaced = true
 			result = append(result, strings.Split(block, "\n")...)
 			continue
 		}
-		if trimmed == endMarker {
+		if line == endMarker {
 			inside = false
 			continue
 		}
@@ -542,12 +558,11 @@ func removeBlock(data, beginMarker, endMarker string) string {
 	var inside bool
 
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == beginMarker {
+		if line == beginMarker {
 			inside = true
 			continue
 		}
-		if trimmed == endMarker {
+		if line == endMarker {
 			inside = false
 			continue
 		}
@@ -624,6 +639,7 @@ func summarizeContent(s string) string {
 	return fmt.Sprintf("%d lines, %d bytes", lines, len(s))
 }
 
+// TODO: extract to shared helper (duplicated in exec, template, repository)
 func truncate(s string, maxLen int) string {
 	s = strings.TrimRight(s, "\n\r")
 	if len(s) <= maxLen {

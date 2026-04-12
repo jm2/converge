@@ -78,8 +78,11 @@ func TestRepository_RepoContent_Dnf(t *testing.T) {
 func TestRepository_RepoContent_Dnf_NoGPG(t *testing.T) {
 	r := NewRepository("local", RepositoryOpts{URI: "file:///opt/repo/", ManagerName: "dnf", Enabled: true})
 	got := r.repoContent()
-	if !strings.Contains(got, "gpgcheck=0") {
-		t.Errorf("should have gpgcheck=0 when no GPGKey, got: %s", got)
+	if !strings.Contains(got, "gpgcheck=1") {
+		t.Errorf("should have gpgcheck=1 even when no GPGKey, got: %s", got)
+	}
+	if strings.Contains(got, "gpgkey=") {
+		t.Errorf("should not have gpgkey= line when GPGKey is empty, got: %s", got)
 	}
 }
 

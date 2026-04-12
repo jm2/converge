@@ -4,6 +4,7 @@ package cron
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/TsekNet/converge/extensions"
 )
@@ -53,3 +54,23 @@ func (c *Cron) fsys() extensions.FS { return extensions.RealFS(c.FS) }
 func (c *Cron) ID() string       { return fmt.Sprintf("cron:%s", c.Name) }
 func (c *Cron) String() string   { return fmt.Sprintf("Cron %s", c.Name) }
 func (c *Cron) IsCritical() bool { return c.Critical }
+
+// validate rejects fields containing newline, carriage return, or null bytes.
+// These characters could inject additional cron lines or corrupt Task Scheduler
+// XML on Windows.
+func (c *Cron) validate() error {
+	const bad = "\n\r\x00"
+	for _, pair := range []struct {
+		name, value string
+	}{
+		{"Schedule", c.Schedule},
+		{"Command", c.Command},
+		{"User", c.User},
+		{"Name", c.Name},
+	} {
+		if strings.ContainsAny(pair.value, bad) {
+			return fmt.Errorf("cron %s: %s contains invalid character (newline, carriage return, or null)", c.Name, pair.name)
+		}
+	}
+	return nil
+}

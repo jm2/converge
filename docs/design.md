@@ -139,7 +139,7 @@ type Extension interface {
 | Package | Description |
 |---------|-------------|
 | `dsl/` | Public SDK: blueprint types, opts structs, resource methods, shard/config helpers |
-| `extensions/` | Resource implementations: file, exec, firewall, pkg, reboot, service, user, registry, secpol, auditpol, sysctl, plist |
+| `extensions/` | Resource implementations: one subdirectory per resource type, see directory for full list |
 | `internal/` | Engine, DAG graph, daemon, auto-edges, exit codes, platform detection, output, logging |
 | `cmd/converge/` | Cobra CLI entry point, blueprint registration |
 | `blueprints/` | Built-in blueprints: baseline, linux, darwin, windows, CIS L1 |

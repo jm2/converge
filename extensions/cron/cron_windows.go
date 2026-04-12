@@ -4,6 +4,7 @@ package cron
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/go-ole/go-ole"
@@ -14,6 +15,10 @@ import (
 
 // Check queries the Windows Task Scheduler COM API for the named task.
 func (c *Cron) Check(_ context.Context) (*extensions.State, error) {
+	if err := c.validate(); err != nil {
+		return nil, err
+	}
+
 	exists, err := taskExists(c.Name)
 	if err != nil {
 		return nil, fmt.Errorf("query task %s: %w", c.Name, err)
@@ -45,6 +50,10 @@ func (c *Cron) Check(_ context.Context) (*extensions.State, error) {
 
 // Apply creates or removes a Windows scheduled task via the Task Scheduler COM API.
 func (c *Cron) Apply(_ context.Context) (*extensions.Result, error) {
+	if err := c.validate(); err != nil {
+		return nil, err
+	}
+
 	if c.State == "absent" {
 		if err := deleteTask(c.Name); err != nil {
 			return nil, err
@@ -63,7 +72,10 @@ func (c *Cron) Apply(_ context.Context) (*extensions.Result, error) {
 func withTaskService(fn func(service *ole.IDispatch) error) error {
 	if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err != nil {
 		// S_FALSE (0x00000001) means COM was already initialized on this thread.
-		if err.(*ole.OleError).Code() != 0x00000001 {
+		var oleErr *ole.OleError
+		if errors.As(err, &oleErr) && oleErr.Code() == 0x00000001 {
+			// Safe to continue: COM already initialized.
+		} else {
 			return fmt.Errorf("CoInitializeEx: %w", err)
 		}
 	}
