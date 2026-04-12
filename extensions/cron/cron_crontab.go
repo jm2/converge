@@ -5,8 +5,9 @@ package cron
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"strings"
 
@@ -34,8 +35,8 @@ func (c *Cron) Check(_ context.Context) (*extensions.State, error) {
 	path := c.cronFilePath()
 	wantLine := c.cronLine()
 
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	data, err := c.fsys().ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
 		if c.State == "absent" {
 			return &extensions.State{InSync: true}, nil
 		}
@@ -81,18 +82,18 @@ func (c *Cron) Apply(_ context.Context) (*extensions.Result, error) {
 	path := c.cronFilePath()
 
 	if c.State == "absent" {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if err := c.fsys().Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("remove %s: %w", path, err)
 		}
 		return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "removed"}, nil
 	}
 
-	if err := os.MkdirAll(cronDir, 0755); err != nil {
+	if err := c.fsys().MkdirAll(cronDir, 0755); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", cronDir, err)
 	}
 
 	content := c.cronLine() + "\n"
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := c.fsys().WriteFile(path, []byte(content), 0644); err != nil {
 		return nil, fmt.Errorf("write %s: %w", path, err)
 	}
 

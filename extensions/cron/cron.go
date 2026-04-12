@@ -4,6 +4,8 @@ package cron
 
 import (
 	"fmt"
+
+	"github.com/TsekNet/converge/extensions"
 )
 
 // Cron ensures a cron job or Windows scheduled task exists
@@ -15,6 +17,7 @@ type Cron struct {
 	User     string // user to run as (Linux/macOS: crontab owner, Windows: SYSTEM or username)
 	State    string // "present" or "absent"
 	Critical bool
+	FS       extensions.FS // nil uses the real OS filesystem
 }
 
 // Opts holds configurable fields for a Cron resource.
@@ -24,6 +27,7 @@ type Opts struct {
 	User     string // user to run as (Linux/macOS: crontab owner, Windows: SYSTEM or username)
 	State    string // "present" or "absent"
 	Critical bool
+	FS       extensions.FS // inject a mock for testing
 }
 
 // New creates a Cron resource. State defaults to "present" when the Opts
@@ -40,8 +44,11 @@ func New(name string, opts Opts) *Cron {
 		User:     opts.User,
 		State:    state,
 		Critical: opts.Critical,
+		FS:       opts.FS,
 	}
 }
+
+func (c *Cron) fsys() extensions.FS { return extensions.RealFS(c.FS) }
 
 func (c *Cron) ID() string       { return fmt.Sprintf("cron:%s", c.Name) }
 func (c *Cron) String() string   { return fmt.Sprintf("Cron %s", c.Name) }

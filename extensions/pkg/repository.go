@@ -2,8 +2,9 @@ package pkg
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"strings"
 
@@ -22,6 +23,7 @@ type Repository struct {
 	State        string // "present" or "absent"
 	ManagerName  string // "apt", "dnf", or "yum"
 	Critical     bool
+	FS           extensions.FS // nil uses the real OS filesystem
 }
 
 // RepositoryOpts holds configurable fields for a Repository resource.
@@ -34,6 +36,7 @@ type RepositoryOpts struct {
 	State        string // "present" or "absent"
 	ManagerName  string // "apt", "dnf", or "yum"
 	Critical     bool
+	FS           extensions.FS // inject a mock for testing
 }
 
 // NewRepository creates a Repository resource. State defaults to "present"
@@ -54,12 +57,15 @@ func NewRepository(name string, opts RepositoryOpts) *Repository {
 		State:        state,
 		ManagerName:  opts.ManagerName,
 		Critical:     opts.Critical,
+		FS:           opts.FS,
 	}
 }
 
 func (r *Repository) ID() string       { return fmt.Sprintf("repository:%s", r.Name) }
 func (r *Repository) String() string   { return fmt.Sprintf("Repository %s (%s)", r.Name, r.ManagerName) }
 func (r *Repository) IsCritical() bool { return r.Critical }
+
+func (r *Repository) fsys() extensions.FS { return extensions.RealFS(r.FS) }
 
 func (r *Repository) repoFilePath() string {
 	switch r.ManagerName {
@@ -106,8 +112,8 @@ func (r *Repository) Check(_ context.Context) (*extensions.State, error) {
 		return nil, fmt.Errorf("unsupported package manager for repositories: %q", r.ManagerName)
 	}
 
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	data, err := r.fsys().ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
 		if r.State == "absent" {
 			return &extensions.State{InSync: true}, nil
 		}
@@ -152,18 +158,18 @@ func (r *Repository) Apply(_ context.Context) (*extensions.Result, error) {
 	}
 
 	if r.State == "absent" {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if err := r.fsys().Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("remove %s: %w", path, err)
 		}
 		return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "removed"}, nil
 	}
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := r.fsys().MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 
-	if err := os.WriteFile(path, []byte(r.repoContent()), 0644); err != nil {
+	if err := r.fsys().WriteFile(path, []byte(r.repoContent()), 0644); err != nil {
 		return nil, fmt.Errorf("write %s: %w", path, err)
 	}
 

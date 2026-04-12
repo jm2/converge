@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/TsekNet/converge/internal/testutil"
 )
 
 func TestTemplate_ID(t *testing.T) {
@@ -280,5 +282,25 @@ func TestTruncate(t *testing.T) {
 				t.Errorf("truncate(%q, %d) = %q, want %q", tt.input, tt.max, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTemplate_MapFS_CheckAndApply(t *testing.T) {
+	mfs := testutil.NewMapFS()
+
+	tmpl := New("/etc/nginx.conf", Opts{
+		Source: "server {{ .Host }}",
+		Vars:   map[string]string{"Host": "localhost"},
+		Mode:   0644,
+		FS:     mfs,
+	})
+	testutil.AssertConverges(t, tmpl)
+
+	data, ok := mfs.Get("/etc/nginx.conf")
+	if !ok {
+		t.Fatal("file should exist in MapFS")
+	}
+	if string(data) != "server localhost" {
+		t.Errorf("content = %q, want %q", data, "server localhost")
 	}
 }

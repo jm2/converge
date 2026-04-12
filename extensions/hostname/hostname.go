@@ -14,17 +14,21 @@ import (
 type Hostname struct {
 	Name     string
 	Critical bool
+	FS       extensions.FS // nil uses the real OS filesystem
 }
 
 // Opts holds configurable fields for a Hostname resource.
 type Opts struct {
 	Critical bool
+	FS       extensions.FS // inject a mock for testing
 }
 
 // New creates a Hostname resource.
 func New(name string, opts Opts) *Hostname {
-	return &Hostname{Name: name, Critical: opts.Critical}
+	return &Hostname{Name: name, Critical: opts.Critical, FS: opts.FS}
 }
+
+func (h *Hostname) fsys() extensions.FS { return extensions.RealFS(h.FS) }
 
 func (h *Hostname) ID() string       { return "hostname:" + h.Name }
 func (h *Hostname) String() string   { return "Hostname " + h.Name }

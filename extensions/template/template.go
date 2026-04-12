@@ -6,9 +6,9 @@ package template
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"text/template"
 
@@ -25,6 +25,7 @@ type Template struct {
 	Owner    string
 	Group    string
 	Critical bool
+	FS       extensions.FS
 }
 
 // Opts holds configurable fields for a Template resource.
@@ -35,6 +36,7 @@ type Opts struct {
 	Owner    string
 	Group    string
 	Critical bool
+	FS       extensions.FS
 }
 
 // New creates a Template with required fields.
@@ -47,8 +49,12 @@ func New(path string, opts Opts) *Template {
 		Owner:    opts.Owner,
 		Group:    opts.Group,
 		Critical: opts.Critical,
+		FS:       opts.FS,
 	}
 }
+
+// fsys returns the configured FS, falling back to OSFS when nil.
+func (t *Template) fsys() extensions.FS { return extensions.RealFS(t.FS) }
 
 func (t *Template) ID() string       { return fmt.Sprintf("template:%s", t.Path) }
 func (t *Template) String() string   { return fmt.Sprintf("Template %s", t.Path) }
@@ -79,8 +85,8 @@ func (t *Template) Check(_ context.Context) (*extensions.State, error) {
 		return nil, fmt.Errorf("invalid path %q: %w", t.Path, err)
 	}
 
-	info, err := os.Stat(absPath)
-	if os.IsNotExist(err) {
+	info, err := t.fsys().Stat(absPath)
+	if errors.Is(err, fs.ErrNotExist) {
 		return &extensions.State{
 			InSync: false,
 			Changes: []extensions.Change{
@@ -95,7 +101,7 @@ func (t *Template) Check(_ context.Context) (*extensions.State, error) {
 
 	var changes []extensions.Change
 
-	existing, err := os.ReadFile(absPath)
+	existing, err := t.fsys().ReadFile(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", absPath, err)
 	}
@@ -128,7 +134,7 @@ func (t *Template) Apply(_ context.Context) (*extensions.Result, error) {
 	}
 
 	dir := filepath.Dir(t.Path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := t.fsys().MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 
@@ -136,12 +142,12 @@ func (t *Template) Apply(_ context.Context) (*extensions.Result, error) {
 	if perm == 0 {
 		perm = 0644
 	}
-	if err := os.WriteFile(t.Path, []byte(rendered), perm); err != nil {
+	if err := t.fsys().WriteFile(t.Path, []byte(rendered), perm); err != nil {
 		return nil, fmt.Errorf("write %s: %w", t.Path, err)
 	}
 
 	if t.Mode != 0 {
-		if err := os.Chmod(t.Path, t.Mode); err != nil {
+		if err := t.fsys().Chmod(t.Path, t.Mode); err != nil {
 			return nil, fmt.Errorf("chmod %s: %w", t.Path, err)
 		}
 	}

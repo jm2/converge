@@ -5,7 +5,6 @@ package hostname
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"golang.org/x/sys/unix"
 
@@ -19,7 +18,7 @@ func (h *Hostname) Apply(_ context.Context) (*extensions.Result, error) {
 		return nil, fmt.Errorf("sethostname(%s): %w", h.Name, err)
 	}
 
-	if err := os.WriteFile("/etc/hostname", []byte(h.Name+"\n"), 0644); err != nil {
+	if err := h.fsys().WriteFile("/etc/hostname", []byte(h.Name+"\n"), 0644); err != nil {
 		return nil, fmt.Errorf("write /etc/hostname: %w", err)
 	}
 

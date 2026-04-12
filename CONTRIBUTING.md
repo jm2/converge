@@ -37,6 +37,21 @@ Short version: implement the [`Extension` interface](extensions/extension.go), d
 - **Logging** via [google/deck](https://github.com/google/deck) -- syslog on Linux, Event Log on Windows
 - **Builds** via [GoReleaser](https://goreleaser.com/) -- see [.goreleaser.yml](.goreleaser.yml)
 
+## Testing Helpers (`internal/testutil`)
+
+The [`internal/testutil`](internal/testutil/) package provides shared test infrastructure. Extensions should use these instead of rolling their own mocks.
+
+| Helper | Purpose | Example |
+|---|---|---|
+| `MapFS` | In-memory `extensions.FS` for testing Check/Apply without root or real filesystem | `mfs := testutil.NewMapFS(); mfs.Set("/etc/conf", data, 0644)` |
+| `AssertConverges(t, ext)` | Verifies the Check/Apply/Check contract: not-in-sync, Apply succeeds, in-sync | `testutil.AssertConverges(t, myFile)` |
+| `AssertInSync(t, ext)` | Verifies Check reports in-sync | `testutil.AssertInSync(t, myFile)` |
+| `AssertDrifted(t, ext)` | Verifies Check reports drift with changes | `testutil.AssertDrifted(t, myFile)` |
+| `MockCmd` | Records `exec.Command` calls and returns scripted output | `mock := testutil.NewMockCmd(); mock.SetOutput("modprobe", "", nil)` |
+| `MockPackageManager` | In-memory `pkg.PackageManager` for package extension tests | `mgr := testutil.NewMockPackageManager("mock")` |
+
+Extensions that do file I/O should accept an `FS extensions.FS` field in their Opts struct. When nil, `extensions.RealFS(nil)` falls back to the real OS filesystem. In tests, inject a `MapFS` to verify behavior without touching disk.
+
 ## PR Checklist
 
 - [ ] `go test ./... -race` passes

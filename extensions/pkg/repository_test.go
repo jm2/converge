@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/TsekNet/converge/internal/testutil"
 )
 
 func TestRepository_ID(t *testing.T) {
@@ -223,5 +225,27 @@ func TestRepository_UnsupportedManager(t *testing.T) {
 	_, err = r.Apply(ctx)
 	if err == nil {
 		t.Error("Apply() should fail for unsupported manager")
+	}
+}
+
+func TestRepository_MapFS_AptCheckAndApply(t *testing.T) {
+	mfs := testutil.NewMapFS()
+
+	r := NewRepository("chrome", RepositoryOpts{
+		URI:          "https://dl.google.com/linux/chrome/deb/",
+		Distribution: "stable",
+		Components:   "main",
+		ManagerName:  "apt",
+		Enabled:      true,
+		FS:           mfs,
+	})
+	testutil.AssertConverges(t, r)
+
+	data, ok := mfs.Get("/etc/apt/sources.list.d/chrome.list")
+	if !ok {
+		t.Fatal("repo file should exist in MapFS")
+	}
+	if !strings.Contains(string(data), "deb https://dl.google.com/linux/chrome/deb/ stable main") {
+		t.Errorf("content = %q", data)
 	}
 }
