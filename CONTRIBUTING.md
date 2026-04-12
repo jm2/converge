@@ -30,7 +30,7 @@ Short version: implement the [`Extension` interface](extensions/extension.go), d
 
 - **Go 1.26** -- use `slices`, `maps`, range-over-int
 - **Table-driven tests** everywhere
-- **Build tags** -- use `_linux`, `_darwin`, `_windows` (not `_unix` or `!windows`)
+- **Build tags** -- use `_linux`, `_darwin`, `_windows` (not `_unix` or `!windows`). Go 1.17+ requires the `//go:build` directive for `go vet` and IDE support, even when the `_linux`/`_darwin`/`_windows` suffix also restricts compilation.
 - **No stubs** -- platform-specific DSL methods live in build-tagged files; if a platform doesn't need an extension, the DSL doesn't expose it
 - **Native APIs** -- prefer `golang.org/x/sys/windows`, `/proc/sys/`, `howett.net/plist` over shelling out
 - **Error wrapping** with `fmt.Errorf("...: %w", err)`

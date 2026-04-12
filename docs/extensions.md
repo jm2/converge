@@ -133,6 +133,8 @@ func detectManager(name string) PackageManager {
 }
 ```
 
+**Note:** If the package manager is not already detected by `internal/platform/`, add detection logic to the appropriate platform detector function (e.g., `detectLinuxPkgManager()` in `internal/platform/platform.go`).
+
 ### 3. Add tests
 
 Create `extensions/pkg/dnf_test.go` with table-driven tests:

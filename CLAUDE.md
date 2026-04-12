@@ -10,7 +10,7 @@ Read `docs/design.md` for philosophy and security model, `docs/extensions.md` fo
 | --- | --- |
 | DSL (blueprint API) | `dsl/` (platform-specific methods in build-tagged files) |
 | Extensions | `extensions/` (one subdirectory per resource type, see directory for full list) |
-| Conditions | `condition/` (FileExists, MountPoint, NetworkInterface, NetworkReachable, RegistryKeyExists) |
+| Conditions | [`condition/`](condition/) (see directory for full list) |
 | Blueprints | `blueprints/` (baseline, per-OS, CIS benchmarks) |
 | Internals | `internal/` (daemon, engine, exit, graph, logging, output, platform, version, watch, winreg) |
 | CLI | `cmd/converge/` |

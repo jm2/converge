@@ -119,14 +119,9 @@ type Extension interface {
 }
 ```
 
-| State | Meaning |
-|-------------|----------------------------------------------|
-| `OK` | System matches desired state. Nothing to do. |
-| `Drifted` | System differs from desired state. |
-| `Missing` | Resource doesn't exist yet. |
-| `Error` | Can't determine state (permissions, etc.). |
+`Check` returns `*State{InSync: true}` when nothing needs to change, or `*State{InSync: false, Changes: [...]}` with specific property changes. See [`extensions/state.go`](../extensions/state.go).
 
-`Check()` is read-only. `Apply()` mutates the system and is only called when `Check()` returns `Drifted` or `Missing`. A follow-up `Check()` must return `OK`, otherwise Converge reports a convergence failure.
+`Check()` is read-only. `Apply()` mutates the system and is only called when `Check()` reports `InSync: false`. A follow-up `Check()` must return `InSync: true`, otherwise Converge reports a convergence failure.
 
 **Idempotency by construction:** Run it once, drift is fixed. Run it again, nothing changes. The engine enforces this via the Check/Apply split.
 
@@ -309,7 +304,7 @@ Defined in `internal/exit/exit.go`:
 - **DAG execution order.** Resources execute in topological layer order. Dependencies complete before dependents.
 - **Auto-edges.** Implicit dependencies detected automatically (Service->Package, File->parent Dir).
 - **Duplicate detection.** Two extensions with same `ID()` = error before any Check().
-- **Critical flag.** If `Critical: true` (default), failure aborts remaining apply.
+- **Critical flag.** If `Critical: true` (default: false), failure aborts remaining apply.
 - **Parallel execution.** `--parallel N` runs up to N resources concurrently within each layer (default: sequential).
 - **Per-resource timeout.** `--timeout` sets the deadline for each resource's Check/Apply cycle.
 - **Detailed exit codes.** `--detailed-exit-codes` enables granular exit codes for CI/CD integration.

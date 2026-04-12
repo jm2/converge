@@ -177,6 +177,21 @@ func Blueprint(r *dsl.Run) {
 
 `r.Platform()` returns a `platform.Info` struct with `OS`, `Distro`, `Arch`, `PkgManager`, and `InitSystem`.
 
+Use `p.Distro` for distro-specific logic within the same OS:
+
+```go
+func Blueprint(r *dsl.Run) {
+    p := r.Platform()
+
+    switch p.Distro {
+    case "ubuntu":
+        r.Package("apt-transport-https", dsl.PackageOpts{State: dsl.Present})
+    case "fedora":
+        r.Package("dnf-plugins-core", dsl.PackageOpts{State: dsl.Present})
+    }
+}
+```
+
 For platform-specific resources like `r.Registry()` (Windows), `r.Sysctl()` (Linux), or `r.Plist()` (macOS), use Go build tags on the blueprint file itself:
 
 ```go
@@ -281,32 +296,32 @@ func Blueprint(r *dsl.Run) {
 
 ## Testing Blueprints
 
-Blueprints are Go functions. Test them with `go test`:
+Blueprints are Go functions compiled into the binary. Test them with `go test` by registering the blueprint and building the DAG:
 
 ```go
-package myblueprint_test
+package blueprints
 
 import (
     "testing"
-    "github.com/TsekNet/converge/dsl/testing/mock"
-    "github.com/myorg/myinfra/blueprints/myblueprint"
+
+    "github.com/TsekNet/converge/dsl"
 )
 
-func TestBlueprint(t *testing.T) {
-    r := mock.NewRun()
-    myblueprint.Blueprint(r)
+func TestBaseline(t *testing.T) {
+    app := dsl.New()
+    app.Register("baseline", "test", Baseline)
 
-    if !r.HasFile("/etc/motd") {
-        t.Error("expected /etc/motd to be declared")
-    }
-
-    if !r.HasPackage("git") {
-        t.Error("expected git package to be declared")
+    // BuildGraph calls the blueprint, builds the DAG, and adds auto-edges.
+    // It returns an error if the blueprint declares duplicate resources,
+    // references missing dependencies, or fails validation.
+    _, err := app.BuildGraph("baseline")
+    if err != nil {
+        t.Fatalf("BuildGraph failed: %v", err)
     }
 }
 ```
 
-No containers, no VMs, no network calls.
+`BuildGraph` exercises the full blueprint: resource declaration, duplicate detection, dependency validation, and auto-edge wiring. No containers, no VMs, no network calls, no root required.
 
 ---
 
@@ -316,17 +331,18 @@ All option structs share these common fields via `dsl.Meta`:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `Critical` | `bool` | `true` | If `true`, failure aborts the run. Set `false` for best-effort. |
+| `Critical` | `bool` | `false` | If `true`, failure aborts the run. Set `true` for resources whose failure should abort the run. |
 | `DependsOn` | `[]string` | `nil` | Explicit resource IDs this resource depends on. Complements auto-edges. |
 | `Noop` | `bool` | `false` | Per-resource dry-run: Check only, skip Apply. |
 | `Retry` | `int` | `0` | Per-resource max retries. 0 = use daemon default (--max-retries). |
 | `Limit` | `float64` | `0` | Per-resource rate limit (events/sec). 0 = use daemon default. |
-| `AutoEdge` | `*bool` | `nil` | Set to `ptrFalse` to disable auto-edges for this resource. |
-| `AutoGroup` | `*bool` | `nil` | Set to `ptrFalse` to disable auto-grouping for this resource. |
+| `AutoEdge` | `*bool` | `nil` | Set to `falseVal := false; &falseVal` to disable auto-edges for this resource. |
+| `AutoGroup` | `*bool` | `nil` | Set to `falseVal := false; &falseVal` to disable auto-grouping for this resource. |
+| `Condition` | `extensions.Condition` | `nil` | Gate on runtime state. See [Conditions](#conditions). |
 
 **Auto-edges:** Dependencies are detected automatically: `service:X` depends on `package:X`, files depend on parent directories, services depend on config files. Use `DependsOn` for dependencies auto-edges cannot detect.
 
-**Auto-grouping:** Package resources with the same manager and state are automatically batched into a single install/remove transaction (e.g., `apt install git curl neovim` instead of three separate calls). Set `AutoGroup: ptrFalse` on a package to opt out.
+**Auto-grouping:** Package resources with the same manager and state are automatically batched into a single install/remove transaction (e.g., `apt install git curl neovim` instead of three separate calls). Set `AutoGroup` to a `*bool` pointing to `false` to opt out (e.g., `falseVal := false; Meta{AutoGroup: &falseVal}`).
 
 Use `DependsOn` for dependencies auto-edges cannot detect:
 
@@ -478,6 +494,8 @@ r.Service(name string, opts dsl.ServiceOpts)
 | macOS | `launchd` | stub (not yet implemented) |
 | Windows | Windows SCM | `golang.org/x/sys/windows/svc/mgr` (native Win32) |
 
+> **macOS note:** launchd is not yet implemented natively. Use `r.Exec()` with `launchctl` as a workaround.
+
 **Idempotency:** Checks current state before acting. Starting a running service is a no-op.
 
 **Examples:**
@@ -525,6 +543,8 @@ r.Exec(name string, opts dsl.ExecOpts)
 | `OnlyIfMatch` | `string` | `""` | When set, guard compares trimmed stdout against this string instead of exit code. |
 | `Shell` | `string` | `""` | `"auto"` (bash on Linux/macOS, powershell on Windows), `"powershell"`, `"pwsh"`, `"cmd"`, `"bash"`, `"sh"`, or custom path. |
 | `ShellParams` | `[]string` | `nil` | When set, replaces the default shell flags. PowerShell default: `-NoProfile -NonInteractive -ExecutionPolicy Bypass`. |
+| `Dir` | `string` | `""` | Working directory. Empty = inherit. |
+| `Env` | `[]string` | `nil` | Additional environment variables (KEY=VALUE format). |
 | `Retries` | `int` | `0` | Number of retry attempts on failure. |
 | `RetryDelay` | `time.Duration` | `0` | Delay between retries. |
 
@@ -818,7 +838,7 @@ The `key` uses dotted notation, e.g., `net.ipv4.ip_forward`.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `Value` | `string` | `""` | Desired kernel parameter value. Required. |
-| `Persist` | `bool` | `true` | If `true`, writes to `/etc/sysctl.d/99-converge.conf` so the setting survives reboots. |
+| `Persist` | `bool` | `false` | If `true`, writes to `/etc/sysctl.d/99-converge.conf` so the setting survives reboots. Set `true` for reboot persistence. |
 
 **API:** Direct file I/O to `/proc/sys/`: no `sysctl` command.
 

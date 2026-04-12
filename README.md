@@ -26,7 +26,9 @@ Download latest installer for your platform from the [Releases](https://github.c
 
 ## Quick start
 
-**1. Edit a blueprint** (`blueprints/baseline.go`):
+**1. Edit a blueprint** ([blueprints/baseline.go](blueprints/baseline.go)):
+
+Blueprints are Go code compiled into the `converge` binary. Editing a blueprint requires a rebuild.
 
 ```go
 package blueprints
@@ -52,15 +54,21 @@ func Baseline(r *dsl.Run) {
 }
 ```
 
-**2. Plan and serve:**
+**2. Rebuild:**
 
 ```bash
-converge plan baseline               # dry-run, no root needed
-sudo converge serve baseline         # run as persistent daemon, re-converge on drift
-sudo converge serve baseline --timeout 1s  # converge and exit (CI/Packer)
+go build -o bin/converge ./cmd/converge
 ```
 
-**3. Flags:**
+**3. Plan and serve:**
+
+```bash
+bin/converge plan baseline               # dry-run, no root needed
+sudo bin/converge serve baseline         # run as persistent daemon, re-converge on drift
+sudo bin/converge serve baseline --timeout 1s  # converge and exit (CI/Packer)
+```
+
+**4. Flags:**
 
 ```bash
 converge plan baseline --out=json             # machine-readable output (also: serial)
