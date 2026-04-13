@@ -12,7 +12,7 @@ Read `docs/design.md` for philosophy and security model, `docs/extensions.md` fo
 | Extensions | `extensions/` (one subdirectory per resource type, see directory for full list) |
 | Conditions | [`condition/`](condition/) (see directory for full list) |
 | Blueprints | `blueprints/` (baseline, per-OS, CIS benchmarks) |
-| Internals | `internal/` (daemon, engine, exit, graph, logging, output, platform, version, watch, winreg) |
+| Internals | `internal/` (daemon, engine, exit, graph, logging, output, platform, shell, testutil, version, watch, winreg) |
 | CLI | `cmd/converge/` |
 
 ## Build and test

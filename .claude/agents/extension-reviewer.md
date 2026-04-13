@@ -47,6 +47,14 @@ Optional interfaces:
 - Table-driven tests with named subtests
 - Tests for Check (current state detection) and Apply (convergence)
 - Tests for error cases and edge conditions
+- Use `testutil.AssertConverges(t, ext)` for the Check/Apply/Check contract
+- Use `testutil.MapFS` for file I/O tests without root (see `internal/testutil/`)
+
+### 6. Testability (FS Interface)
+- Extensions that manage files must accept `extensions.FS` in their Opts struct
+- `nil` defaults to the real OS filesystem via `extensions.RealFS()`
+- Direct `os.ReadFile`/`os.WriteFile`/`os.Stat` calls that bypass `fsys()` are a finding
+- Use `errors.Is(err, fs.ErrNotExist)` not `os.IsNotExist()` for mock FS compatibility
 
 ## Output
 

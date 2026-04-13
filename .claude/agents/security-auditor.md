@@ -28,7 +28,12 @@ Review: registry paths that could escalate privileges, security policy weakening
 
 Review: `Check` methods with side effects, `Apply` without rollback capability, missing error handling that leaves partial state.
 
-### 5. File Permissions (`extensions/file/`)
+### 5. Condition Shell Execution (`condition/shell.go`)
+`condition.Shell()` runs user-supplied commands in the platform shell as the daemon user (root). The command string is passed to `internal/shell.Command()` which wraps it in PowerShell/bash/cmd.
+
+Review: commands constructed from untrusted blueprint input, unquoted arguments interpolated into the shell string, `Match()` bypass via output injection (e.g. attacker controlling stdout to match an expected value).
+
+### 6. File Permissions (`extensions/file/`)
 Creates/modifies files with specified ownership and permissions.
 
 Review: files created world-writable, ownership changes to root-owned paths, symlink following.
