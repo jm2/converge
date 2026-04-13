@@ -193,7 +193,7 @@ This means a Linux blueprint can call `r.Sysctl()` but not `r.Registry()`. The c
 
 ### DAG Engine
 
-Resources are organized in a directed acyclic graph (DAG). Dependencies are detected automatically via auto-edges and can be declared explicitly via `DependsOn`. The engine computes topological layers and executes them in order, with resources in the same layer running concurrently.
+Resources are organized in a directed acyclic graph (DAG). Dependencies are detected automatically via auto-edges and can be declared explicitly via `condition.Package("name")` on the resource's `Condition` field. The engine computes topological layers and executes them in order, with resources in the same layer running concurrently.
 
 ```mermaid
 graph TD
@@ -265,7 +265,7 @@ flowchart TD
 
 **Key behaviors:**
 
-- **Condition gates.** Resources with a `Condition` set in `Meta` are skipped until the condition is met. The daemon waits using OS-native events (netlink, inotify, NotifyIpInterfaceChange, RegNotifyChangeKeyValue) and triggers initial convergence the moment the condition becomes true. See the `condition` package.
+- **Condition gates.** Resources with a `Condition` set are skipped until the condition is met. The daemon waits using OS-native events (netlink, inotify, NotifyIpInterfaceChange, RegNotifyChangeKeyValue) and triggers initial convergence the moment the condition becomes true. See the `condition` package.
 - **Event-driven, not polling.** Resources implementing `Watcher` (File via inotify, Service via dbus) block on OS-level events. Near-zero CPU at idle.
 - **DAG propagation.** When a resource changes, its downstream dependents in the DAG are automatically re-checked. This is what Chef, Puppet, and Ansible lack entirely.
 - **Polling fallback.** Resources without native OS events (Package, Exec) are polled at configurable intervals.

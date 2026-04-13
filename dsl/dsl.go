@@ -26,17 +26,16 @@ const (
 	Stopped ServiceState = "stopped"
 )
 
-// Meta holds common metadata shared by all Opts structs.
-type Meta struct {
-	DependsOn []string
-	Critical  bool
-	Noop      bool                 // skip Apply, only Check (per-resource dry-run)
-	Retry     int                  // per-resource max retries (0 = use daemon default)
-	Limit     float64              // per-resource rate limit (0 = use daemon default)
-	AutoEdge  *bool                // nil = enabled (default), false = disable auto-edges for this resource
-	AutoGroup *bool                // nil = enabled (default), false = disable auto-grouping for this resource
-	Condition extensions.Condition // nil = no gate; non-nil = skip until condition is met
-}
+// Common fields shared by all Opts structs. Each Opts struct includes these
+// directly (no embedding) so blueprint authors write flat structs.
+//
+//   Critical  bool                 // false = best-effort, true = failure aborts the run
+//   Noop      bool                 // skip Apply, only Check (per-resource dry-run)
+//   Retry     int                  // per-resource max retries (0 = use daemon default)
+//   Limit     float64              // per-resource rate limit (0 = use daemon default)
+//   AutoEdge  *bool                // nil = enabled, false = disable auto-edges
+//   AutoGroup *bool                // nil = enabled, false = disable auto-grouping
+//   Condition extensions.Condition // nil = no gate; non-nil = skip until condition is met
 
 type FileOpts struct {
 	Content      string
@@ -48,77 +47,135 @@ type FileOpts struct {
 	Checksum     string // expected SHA-256 hex digest (only with URL)
 	BlockName    string // when set, manages a tagged block within the file instead of owning the entire file
 	BlockComment string // comment prefix for block markers (default: "#")
-	Meta
+	Critical     bool
+	Noop         bool
+	Retry        int
+	Limit        float64
+	AutoEdge     *bool
+	AutoGroup    *bool
+	Condition    extensions.Condition
 }
 
 type PackageOpts struct {
-	State ResourceState
-	Meta
+	State     ResourceState
+	Critical  bool
+	Noop      bool
+	Retry     int
+	Limit     float64
+	AutoEdge  *bool
+	AutoGroup *bool
+	Condition extensions.Condition
 }
 
 type ServiceOpts struct {
 	State       ServiceState
 	Enable      bool
 	StartupType string // "auto", "delayed-auto", "manual", "disabled" (Windows SCM)
-	Meta
+	Critical    bool
+	Noop        bool
+	Retry       int
+	Limit       float64
+	AutoEdge    *bool
+	AutoGroup   *bool
+	Condition   extensions.Condition
 }
 
 type ExecOpts struct {
 	Command     string
 	Args        []string
-	OnlyIf      string
-	OnlyIfMatch string   // when set, OnlyIf compares trimmed stdout against this string
-	Shell       string   // "powershell", "pwsh", "bash", "sh", or "" (direct exec)
+	Shell       string   // "powershell", "pwsh", "cmd", "bash", "sh", "auto", or custom path
 	ShellParams []string // when set, replaces default shell flags
 	Dir         string
 	Env         []string
 	Retries     int
 	RetryDelay  time.Duration
-	Meta
+	Critical    bool
+	Noop        bool
+	Retry       int
+	Limit       float64
+	AutoEdge    *bool
+	AutoGroup   *bool
+	Condition   extensions.Condition
 }
 
 type UserOpts struct {
-	Groups []string
-	Shell  string
-	Home   string
-	System bool
-	Meta
+	Groups    []string
+	Shell     string
+	Home      string
+	System    bool
+	Critical  bool
+	Noop      bool
+	Retry     int
+	Limit     float64
+	AutoEdge  *bool
+	AutoGroup *bool
+	Condition extensions.Condition
 }
 
 type RegistryOpts struct {
-	Value string
-	Type  string
-	Data  any
-	State ResourceState // Present (default) or Absent
-	Meta
+	Value     string
+	Type      string
+	Data      any
+	State     ResourceState // Present (default) or Absent
+	Critical  bool
+	Noop      bool
+	Retry     int
+	Limit     float64
+	AutoEdge  *bool
+	AutoGroup *bool
+	Condition extensions.Condition
 }
 
 type SecurityPolicyOpts struct {
-	Category string // "password" or "lockout"
-	Key      string
-	Value    string
-	Meta
+	Category  string // "password" or "lockout"
+	Key       string
+	Value     string
+	Critical  bool
+	Noop      bool
+	Retry     int
+	Limit     float64
+	AutoEdge  *bool
+	AutoGroup *bool
+	Condition extensions.Condition
 }
 
 type AuditPolicyOpts struct {
 	Subcategory string
 	Success     bool
 	Failure     bool
-	Meta
+	Critical    bool
+	Noop        bool
+	Retry       int
+	Limit       float64
+	AutoEdge    *bool
+	AutoGroup   *bool
+	Condition   extensions.Condition
 }
 
 type SysctlOpts struct {
-	Value   string
-	Persist bool
-	Meta
+	Value     string
+	Persist   bool
+	Critical  bool
+	Noop      bool
+	Retry     int
+	Limit     float64
+	AutoEdge  *bool
+	AutoGroup *bool
+	Condition extensions.Condition
 }
 
 type PlistOpts struct {
-	Key   string
-	Value any
-	Type  string // "bool", "int", "float", "string"
-	Host  bool   // true = /Library/Preferences (system-wide), false = ~/Library/Preferences
-	Meta
+	Key       string
+	Value     any
+	Type      string // "bool", "int", "float", "string"
+	Host      bool   // true = /Library/Preferences (system-wide), false = ~/Library/Preferences
+	Critical  bool
+	Noop      bool
+	Retry     int
+	Limit     float64
+	AutoEdge  *bool
+	AutoGroup *bool
+	Condition extensions.Condition
 }
 
 type FirewallOpts struct {
@@ -129,27 +186,51 @@ type FirewallOpts struct {
 	Source    string // Optional source address/CIDR
 	Dest      string // Optional destination address/CIDR
 	State     ResourceState
-	Meta
+	Critical  bool
+	Noop      bool
+	Retry     int
+	Limit     float64
+	AutoEdge  *bool
+	AutoGroup *bool
+	Condition extensions.Condition
 }
 
 type RebootOpts struct {
-	Reason  string
-	Message string // optional user-facing message shown in converge output before the reboot fires
-	Delay   time.Duration
-	Meta
+	Reason    string
+	Message   string // optional user-facing message shown in converge output before the reboot fires
+	Delay     time.Duration
+	Critical  bool
+	Noop      bool
+	Retry     int
+	Limit     float64
+	AutoEdge  *bool
+	AutoGroup *bool
+	Condition extensions.Condition
 }
 
 type TemplateOpts struct {
-	Source string            // Go text/template source
-	Vars   map[string]string // template variables
-	Mode   os.FileMode
-	Owner  string
-	Group  string
-	Meta
+	Source    string            // Go text/template source
+	Vars     map[string]string // template variables
+	Mode     os.FileMode
+	Owner    string
+	Group    string
+	Critical bool
+	Noop     bool
+	Retry    int
+	Limit    float64
+	AutoEdge  *bool
+	AutoGroup *bool
+	Condition extensions.Condition
 }
 
 type HostnameOpts struct {
-	Meta
+	Critical  bool
+	Noop      bool
+	Retry     int
+	Limit     float64
+	AutoEdge  *bool
+	AutoGroup *bool
+	Condition extensions.Condition
 }
 
 type KernelModuleState string
@@ -160,16 +241,28 @@ const (
 )
 
 type KernelModuleOpts struct {
-	State KernelModuleState
-	Meta
+	State     KernelModuleState
+	Critical  bool
+	Noop      bool
+	Retry     int
+	Limit     float64
+	AutoEdge  *bool
+	AutoGroup *bool
+	Condition extensions.Condition
 }
 
 type CronOpts struct {
-	Schedule string // cron expression (Linux/macOS) or trigger spec (Windows)
-	Command  string
-	User     string // user to run as
-	State    ResourceState
-	Meta
+	Schedule  string // cron expression (Linux/macOS) or trigger spec (Windows)
+	Command   string
+	User      string // user to run as
+	State     ResourceState
+	Critical  bool
+	Noop      bool
+	Retry     int
+	Limit     float64
+	AutoEdge  *bool
+	AutoGroup *bool
+	Condition extensions.Condition
 }
 
 type RepositoryOpts struct {
@@ -179,5 +272,11 @@ type RepositoryOpts struct {
 	GPGKey       string // GPG key URL
 	Enabled      bool
 	State        ResourceState
-	Meta
+	Critical     bool
+	Noop         bool
+	Retry        int
+	Limit        float64
+	AutoEdge     *bool
+	AutoGroup    *bool
+	Condition    extensions.Condition
 }

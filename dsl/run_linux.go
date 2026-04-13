@@ -9,7 +9,7 @@ func (r *Run) Sysctl(key string, opts SysctlOpts) {
 	if !r.require("Sysctl", "value", opts.Value) {
 		return
 	}
-	r.addResource(newSysctlExtension(key, opts), opts.Meta)
+	r.addResource(newSysctlExtension(key, opts), nm(opts.Noop, opts.Retry, opts.Limit, opts.AutoEdge, opts.AutoGroup, opts.Condition))
 }
 
 func (r *Run) KernelModule(module string, opts KernelModuleOpts) {
@@ -19,5 +19,5 @@ func (r *Run) KernelModule(module string, opts KernelModuleOpts) {
 	if opts.State == "" {
 		opts.State = ModuleLoaded
 	}
-	r.addResource(newKernelModuleExtension(module, opts), opts.Meta)
+	r.addResource(newKernelModuleExtension(module, opts), nm(opts.Noop, opts.Retry, opts.Limit, opts.AutoEdge, opts.AutoGroup, opts.Condition))
 }

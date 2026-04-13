@@ -8,7 +8,7 @@ For real-world blueprints, see the [blueprints/](../blueprints/) directory, incl
 - [Writing a Blueprint](#writing-a-blueprint)
 - [Registering in main.go](#registering-in-maingo)
 - [Platform-Conditional Logic](#platform-conditional-logic)
-- [Explicit Dependencies with DependsOn](#explicit-dependencies-with-dependson)
+- [Dependencies and Conditions](#dependencies-and-conditions)
 - [Daemon Mode (`converge serve`)](#daemon-mode-converge-serve)
 - [Blueprint Composition](#blueprint-composition)
 - [Testing Blueprints](#testing-blueprints)
@@ -22,6 +22,7 @@ For real-world blueprints, see the [blueprints/](../blueprints/) directory, incl
   - [Plist](#plist-macos-only)
   - [InShard](#inshard), [Secret / Encrypted Config](#secret--encrypted-config)
 - [Conditions](#conditions)
+  - [Shell](#shell-arbitrary-command-guards), [Resource](#resource-dag-dependencies), [Combinators (All, Any, Not)](#combinators-all-any-not)
   - [NetworkInterface](#networkinterface-vpn-gated-firewall-rules), [MountPoint](#mountpoint-nfs-backed-service)
   - [FileExists](#fileexists-cert-enrollment-after-bootstrap), [NetworkReachable](#networkreachable-proxy-config-before-package-installs)
   - [RegistryKey / RegistryValue](#registrykeyexists--registryvalueexists--registryvalueequals-windows-only)
@@ -214,24 +215,31 @@ The compiler enforces this: you can't call `r.Registry()` from a Linux-tagged fi
 
 ---
 
-## Explicit Dependencies with DependsOn
+## Dependencies and Conditions
 
-Auto-edges handle most dependency relationships automatically (Service->Package, File->parent Dir). For dependencies that auto-edges cannot detect, use `DependsOn`:
+Auto-edges handle most dependency relationships automatically (Service->Package, File->parent Dir). For dependencies that auto-edges cannot detect, use typed resource conditions (e.g. `condition.Package`, `condition.File`) to declare explicit DAG edges. Use `condition.Shell` to gate resources on arbitrary command output. Combine conditions with `condition.All`, `condition.Any`, and `condition.Not`.
 
 ```go
+import (
+    "github.com/TsekNet/converge/condition"
+    "github.com/TsekNet/converge/dsl"
+)
+
 func Blueprint(r *dsl.Run) {
     r.Package("postgresql", dsl.PackageOpts{State: dsl.Present})
 
     r.Exec("db-migrate", dsl.ExecOpts{
-        Command:   "/usr/bin/db-migrate",
-        OnlyIf:    "test -f /var/lib/myapp/.migration-done",
-        Meta: dsl.Meta{DependsOn: []string{"package:postgresql"}},
+        Command: "/usr/bin/db-migrate",
+        Condition: condition.All(
+            condition.Package("postgresql"),
+            condition.Shell("test -f /var/lib/myapp/.migration-done"),
+        ),
     })
 
     r.Service("myapp", dsl.ServiceOpts{
         State:     dsl.Running,
         Enable:    true,
-        Meta: dsl.Meta{DependsOn: []string{"exec:db-migrate"}},
+        Condition: condition.Exec("db-migrate"),
     })
 }
 ```
@@ -257,7 +265,7 @@ converge.exe serve baseline
 
 What happens:
 
-1. The DAG is built with auto-edges and explicit `DependsOn` relationships
+1. The DAG is built with auto-edges and explicit typed resource conditions (e.g. `condition.Package`, `condition.File`) dependencies
 2. Initial convergence runs all resources in topological order
 3. Per-resource watchers start (inotify for files, dbus for services, etc.)
 4. When drift is detected, the drifted resource is re-checked and its DAG dependents are re-evaluated
@@ -327,12 +335,11 @@ func TestBaseline(t *testing.T) {
 
 ## Resource Reference
 
-All option structs share these common fields via `dsl.Meta`:
+All option structs share these common fields directly on each Opts struct:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `Critical` | `bool` | `false` | If `true`, failure aborts the run. Set `true` for resources whose failure should abort the run. |
-| `DependsOn` | `[]string` | `nil` | Explicit resource IDs this resource depends on. Complements auto-edges. |
 | `Noop` | `bool` | `false` | Per-resource dry-run: Check only, skip Apply. |
 | `Retry` | `int` | `0` | Per-resource max retries. 0 = use daemon default (--max-retries). |
 | `Limit` | `float64` | `0` | Per-resource rate limit (events/sec). 0 = use daemon default. |
@@ -340,16 +347,18 @@ All option structs share these common fields via `dsl.Meta`:
 | `AutoGroup` | `*bool` | `nil` | Set to `falseVal := false; &falseVal` to disable auto-grouping for this resource. |
 | `Condition` | `extensions.Condition` | `nil` | Gate on runtime state. See [Conditions](#conditions). |
 
-**Auto-edges:** Dependencies are detected automatically: `service:X` depends on `package:X`, files depend on parent directories, services depend on config files. Use `DependsOn` for dependencies auto-edges cannot detect.
+**Auto-edges:** Dependencies are detected automatically: `service:X` depends on `package:X`, files depend on parent directories, services depend on config files. Use typed resource conditions (e.g. `condition.Package`, `condition.File`) for dependencies auto-edges cannot detect.
 
 **Auto-grouping:** Package resources with the same manager and state are automatically batched into a single install/remove transaction (e.g., `apt install git curl neovim` instead of three separate calls). Set `AutoGroup` to a `*bool` pointing to `false` to opt out (e.g., `falseVal := false; Meta{AutoGroup: &falseVal}`).
 
-Use `DependsOn` for dependencies auto-edges cannot detect:
+Use typed resource conditions (e.g. `condition.Package`, `condition.File`) for dependencies auto-edges cannot detect:
 
 ```go
+import "github.com/TsekNet/converge/condition"
+
 r.Exec("migrate", dsl.ExecOpts{
-    Command:   "/usr/bin/db-migrate",
-    Meta: dsl.Meta{DependsOn: []string{"package:postgresql"}},
+    Command: "/usr/bin/db-migrate",
+        Condition: condition.Package("postgresql"),
 })
 ```
 
@@ -539,8 +548,6 @@ r.Exec(name string, opts dsl.ExecOpts)
 |-------|------|---------|-------------|
 | `Command` | `string` | `""` | The command to execute (or script body when Shell is set). Required. |
 | `Args` | `[]string` | `nil` | Arguments passed to the command. Ignored when Shell is set. |
-| `OnlyIf` | `string` | `""` | Guard command. If exits 0 (or output matches OnlyIfMatch), `Command` is skipped. |
-| `OnlyIfMatch` | `string` | `""` | When set, guard compares trimmed stdout against this string instead of exit code. |
 | `Shell` | `string` | `""` | `"auto"` (bash on Linux/macOS, powershell on Windows), `"powershell"`, `"pwsh"`, `"cmd"`, `"bash"`, `"sh"`, or custom path. |
 | `ShellParams` | `[]string` | `nil` | When set, replaces the default shell flags. PowerShell default: `-NoProfile -NonInteractive -ExecutionPolicy Bypass`. |
 | `Dir` | `string` | `""` | Working directory. Empty = inherit. |
@@ -548,15 +555,17 @@ r.Exec(name string, opts dsl.ExecOpts)
 | `Retries` | `int` | `0` | Number of retry attempts on failure. |
 | `RetryDelay` | `time.Duration` | `0` | Delay between retries. |
 
-**Idempotency:** Not inherently idempotent. Always provide an `OnlyIf` command to make it conditional.
+**Idempotency:** Not inherently idempotent. Always use `condition.Shell("...")` on `Meta.Condition` to make it conditional.
 
 **Examples:**
 
 ```go
+import "github.com/TsekNet/converge/condition"
+
 // Linux: run a script only if a marker file is missing
 r.Exec("bootstrap", dsl.ExecOpts{
     Command: "/usr/local/bin/bootstrap.sh",
-    OnlyIf:  "test -f /var/lib/myapp/.bootstrapped",
+        Condition: condition.Shell("test -f /var/lib/myapp/.bootstrapped"),
 })
 
 // macOS: flush DNS cache
@@ -565,28 +574,27 @@ r.Exec("flush-dns", dsl.ExecOpts{
     Args:    []string{"-flushcache"},
 })
 
-// Windows: enable TLS 1.2 (OnlyIf checks if already set)
+// Windows: enable TLS 1.2 (condition checks if already set)
 r.Exec("enable-tls12", dsl.ExecOpts{
     Command: "powershell.exe",
     Args:    []string{"-NoProfile", "-Command", "New-ItemProperty -Path 'HKLM:\\SYSTEM\\...' -Name Enabled -Value 1"},
-    OnlyIf:  "powershell.exe -NoProfile -Command \"(Get-ItemProperty 'HKLM:\\SYSTEM\\...').Enabled -eq 1\"",
+        Condition: condition.Shell(`powershell.exe -NoProfile -Command "(Get-ItemProperty 'HKLM:\SYSTEM\...').Enabled -eq 1"`),
 })
 
 // Retry on transient failure (all platforms)
 r.Exec("download-agent", dsl.ExecOpts{
     Command:    "curl",
     Args:       []string{"-fsSL", "-o", "/tmp/agent.tar.gz", "https://example.com/agent.tar.gz"},
-    OnlyIf:     "test -f /tmp/agent.tar.gz",
     Retries:    3,
     RetryDelay: 5 * time.Second,
+        Condition: condition.Shell("test -f /tmp/agent.tar.gz"),
 })
 
 // PowerShell: enable Windows feature (5.1, default path)
 r.Exec("enable-wsl", dsl.ExecOpts{
-    Shell:       "powershell",
-    Command:     "Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -NoRestart",
-    OnlyIf:      "(Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux).State",
-    OnlyIfMatch: "Enabled",
+    Shell:   "powershell",
+    Command: "Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -NoRestart",
+        Condition: condition.Shell("(Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux).State").In("powershell").Match("Enabled"),
 })
 
 // PowerShell 7+: multi-line script
@@ -598,8 +606,7 @@ r.Exec("configure-defender", dsl.ExecOpts{
             Set-MpPreference -DisableRealtimeMonitoring $false
         }
     `,
-    OnlyIf:      "(Get-MpPreference).DisableRealtimeMonitoring",
-    OnlyIfMatch: "False",
+        Condition: condition.Shell("(Get-MpPreference).DisableRealtimeMonitoring").In("pwsh").Match("False"),
 })
 
 // PowerShell with custom parameters
@@ -611,10 +618,9 @@ r.Exec("run-with-profile", dsl.ExecOpts{
 
 // Bash: multi-line script with output-based guard
 r.Exec("set-timezone", dsl.ExecOpts{
-    Shell:       "bash",
-    Command:     "timedatectl set-timezone America/Los_Angeles",
-    OnlyIf:      "timedatectl show --property=Timezone --value",
-    OnlyIfMatch: "America/Los_Angeles",
+    Shell:   "bash",
+    Command: "timedatectl set-timezone America/Los_Angeles",
+        Condition: condition.Shell("timedatectl show --property=Timezone --value").Match("America/Los_Angeles"),
 })
 ```
 
@@ -1004,24 +1010,26 @@ r.Reboot(name string, opts dsl.RebootOpts)
 **Examples:**
 
 ```go
+import "github.com/TsekNet/converge/condition"
+
 // Reboot after installing a kernel module, then gate post-reboot setup
 // on a device node that only appears after the driver loads.
 r.Exec("install-driver", dsl.ExecOpts{
     Command: "/usr/bin/dkms install mydriver/1.0",
-    OnlyIf:  "test ! -d /sys/module/mydriver",
+        Condition: condition.Shell("test ! -d /sys/module/mydriver"),
 })
 r.Reboot("driver-install", dsl.RebootOpts{
     Reason:  "Kernel module requires reboot to activate",
     Message: "Rebooting to load newly installed driver.",
     Delay:   30 * time.Second,
-    Meta: dsl.Meta{DependsOn: []string{"exec:install-driver"}},
+        Condition: condition.Exec("install-driver"),
 })
 r.Exec("configure-driver", dsl.ExecOpts{
     Command: "/usr/local/bin/configure-driver",
-    Meta: dsl.Meta{
-        Condition: condition.FileExists("/dev/mydriver0"),
-        DependsOn: []string{"reboot:driver-install"},
-    },
+        Condition: condition.All(
+            condition.Reboot("driver-install"),
+            condition.FileExists("/dev/mydriver0"),
+        ),
 })
 ```
 
@@ -1032,24 +1040,24 @@ r.Exec("configure-driver", dsl.ExecOpts{
 
 r.Exec("install-agent", dsl.ExecOpts{
     Command: `C:\installers\agent-setup.exe /quiet`,
-    OnlyIf:  `powershell -NoProfile -Command "!(Test-Path 'C:\Program Files\MyAgent\agent.exe')"`,
+        Condition: condition.Shell(`powershell -NoProfile -Command "!(Test-Path 'C:\Program Files\MyAgent\agent.exe')"`),
 })
 r.Reboot("agent-install", dsl.RebootOpts{
     Reason:  "Agent installation requires reboot to complete service registration",
     Message: "This device will restart in 30 seconds to finish agent setup.",
     Delay:   30 * time.Second,
-    Meta: dsl.Meta{DependsOn: []string{"exec:install-agent"}},
+        Condition: condition.Exec("install-agent"),
 })
 r.Exec("configure-agent", dsl.ExecOpts{
     Command: `C:\Program Files\MyAgent\agent.exe --configure`,
-    Meta: dsl.Meta{
-        // Block until the agent's post-reboot registry key appears.
-        Condition: condition.RegistryValueExists(
-            `HKLM\SOFTWARE\MyOrg\Agent`,
-            "InstallComplete",
+        // Block until the reboot completes and the agent's registry key appears.
+        Condition: condition.All(
+            condition.Reboot("agent-install"),
+            condition.RegistryValueExists(
+                `HKLM\SOFTWARE\MyOrg\Agent`,
+                "InstallComplete",
+            ),
         ),
-        DependsOn: []string{"reboot:agent-install"},
-    },
 })
 ```
 
@@ -1188,10 +1196,8 @@ import "github.com/TsekNet/converge/condition"
 ```go
 r.Firewall("allow-internal", dsl.FirewallOpts{
     Port: 8443, Protocol: "tcp", Action: "allow",
-    Meta: dsl.Meta{
         // Only apply when tun0 (VPN) interface is up.
         Condition: condition.NetworkInterface("tun0"),
-    },
 })
 ```
 
@@ -1201,11 +1207,11 @@ r.Firewall("allow-internal", dsl.FirewallOpts{
 r.File("/mnt/nfs/config/app.conf", dsl.FileOpts{Content: appConfig})
 r.Service("app", dsl.ServiceOpts{
     State: dsl.Running,
-    Meta: dsl.Meta{
-        // Wait for NFS mount before managing the service.
-        Condition: condition.MountPoint("/mnt/nfs"),
-        DependsOn: []string{"file:/mnt/nfs/config/app.conf"},
-    },
+        // Wait for NFS mount and config file before managing the service.
+        Condition: condition.All(
+            condition.MountPoint("/mnt/nfs"),
+            condition.File("/mnt/nfs/config/app.conf"),
+        ),
 })
 ```
 
@@ -1214,10 +1220,8 @@ r.Service("app", dsl.ServiceOpts{
 ```go
 r.Exec("enroll-cert", dsl.ExecOpts{
     Command: "/usr/local/bin/enroll",
-    Meta: dsl.Meta{
         // Wait for the CA bundle to be placed by provisioning.
         Condition: condition.FileExists("/etc/ssl/ca-bundle.crt"),
-    },
 })
 ```
 
@@ -1227,11 +1231,11 @@ r.Exec("enroll-cert", dsl.ExecOpts{
 r.File("/etc/apt/apt.conf.d/99proxy", dsl.FileOpts{Content: proxyConf})
 r.Package("curl", dsl.PackageOpts{
     State: dsl.Present,
-    Meta: dsl.Meta{
-        // Only install packages once the proxy is reachable.
-        Condition: condition.NetworkReachable("proxy.corp.example.com", 3128),
-        DependsOn: []string{"file:/etc/apt/apt.conf.d/99proxy"},
-    },
+        // Only install packages once the proxy is reachable and config is in place.
+        Condition: condition.All(
+            condition.NetworkReachable("proxy.corp.example.com", 3128),
+            condition.File("/etc/apt/apt.conf.d/99proxy"),
+        ),
 })
 ```
 
@@ -1245,32 +1249,26 @@ Gate convergence on Windows registry state. Uses `RegNotifyChangeKeyValue` so no
 // Gate on key existence (any subkey or value creation under this path)
 r.Exec("post-install-step", dsl.ExecOpts{
     Command: `C:\Program Files\MyApp\setup.exe --post-install`,
-    Meta: dsl.Meta{
         Condition: condition.RegistryKeyExists(`HKLM\SOFTWARE\MyOrg\MyApp`),
-    },
 })
 
 // Gate on a specific value existing under a key
 r.File(`C:\ProgramData\MyApp\config.json`, dsl.FileOpts{
     Content: `{"mode": "managed"}`,
-    Meta: dsl.Meta{
         Condition: condition.RegistryValueExists(
             `HKLM\SOFTWARE\MyOrg\MyApp`,
             "SetupComplete",
         ),
-    },
 })
 
 // Gate on a value equaling a specific string or integer
 r.Exec("activate-feature", dsl.ExecOpts{
     Command: `C:\Program Files\MyApp\activate.exe`,
-    Meta: dsl.Meta{
         Condition: condition.RegistryValueEquals(
             `HKLM\SOFTWARE\MyOrg\MyApp`,
             "LicenseState",
             "active",
         ),
-    },
 })
 ```
 
@@ -1284,10 +1282,104 @@ All three constructors return `*registryCondition`, which implements `extensions
 
 If the target key does not yet exist, `Wait` walks up the key path to find the nearest existing ancestor and watches the subtree with `bWatchSubtree=true`.
 
+### Shell: arbitrary command guards
+
+`condition.Shell` runs a command in the platform-default shell (bash on Linux/macOS, powershell on Windows). Exit code 0 means the condition is met. Chain `.Match("expected")` to compare trimmed stdout instead of exit code. Chain `.In("shell")` to override the shell.
+
+```go
+import "github.com/TsekNet/converge/condition"
+
+// Exit-code guard: met when the command exits 0
+r.Exec("bootstrap", dsl.ExecOpts{
+    Command: "/usr/local/bin/bootstrap.sh",
+        Condition: condition.Shell("test -f /var/lib/myapp/.bootstrapped"),
+})
+
+// Output-match guard: met when stdout matches "Enabled"
+r.Exec("enable-wsl", dsl.ExecOpts{
+    Shell:   "powershell",
+    Command: "Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -NoRestart",
+        Condition: condition.Shell("(Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux).State").In("powershell").Match("Enabled"),
+})
+
+// Explicit shell override with output match
+r.Exec("set-timezone", dsl.ExecOpts{
+    Shell:   "bash",
+    Command: "timedatectl set-timezone America/Los_Angeles",
+        Condition: condition.Shell("timedatectl show --property=Timezone --value").In("bash").Match("America/Los_Angeles"),
+})
+```
+
+### Resource: DAG dependencies
+
+typed resource conditions (e.g. `condition.Package`, `condition.File`) declares an explicit DAG dependency on another resource by its ID (e.g., `"package:nginx"`, `"exec:migrate"`). The condition is met when the referenced resource has completed successfully. This replaces the former `DependsOn` field.
+
+```go
+import "github.com/TsekNet/converge/condition"
+
+r.Package("postgresql", dsl.PackageOpts{State: dsl.Present})
+r.Exec("migrate", dsl.ExecOpts{
+    Command: "/usr/bin/db-migrate",
+        Condition: condition.Package("postgresql"),
+})
+```
+
+### Combinators: All, Any, Not
+
+Combine conditions with `condition.All` (AND), `condition.Any` (OR), and `condition.Not` (inversion).
+
+```go
+import "github.com/TsekNet/converge/condition"
+
+// All: both conditions must be met
+r.Service("app", dsl.ServiceOpts{
+    State: dsl.Running,
+        Condition: condition.All(
+            condition.MountPoint("/mnt/nfs"),
+            condition.File("/mnt/nfs/config/app.conf"),
+        ),
+})
+
+// Any: at least one condition must be met
+r.Exec("fetch-config", dsl.ExecOpts{
+    Command: "/usr/local/bin/fetch-config",
+        Condition: condition.Any(
+            condition.NetworkReachable("primary.example.com", 443),
+            condition.NetworkReachable("fallback.example.com", 443),
+        ),
+})
+
+// Not: invert a condition
+r.Exec("setup-vpn", dsl.ExecOpts{
+    Command: "/usr/local/bin/setup-vpn",
+        Condition: condition.Not(condition.NetworkInterface("tun0")),
+})
+
+// Nested: All with Not and Any
+r.Exec("complex-gate", dsl.ExecOpts{
+    Command: "/usr/local/bin/deploy",
+        Condition: condition.All(
+            condition.Package("myapp"),
+            condition.Not(condition.Shell("pgrep -x deploy")),
+            condition.Any(
+                condition.FileExists("/etc/myapp/config.yaml"),
+                condition.FileExists("/etc/myapp/config.json"),
+            ),
+        ),
+})
+```
+
 ### Available conditions
 
 | Constructor | Platform | Satisfied when | Wait mechanism |
 |---|---|---|---|
+| `condition.Shell("cmd")` | All | Command exits 0 (platform-default shell) | 5s poll |
+| `condition.Shell("cmd").Match("str")` | All | Command stdout matches `str` | 5s poll |
+| `condition.Shell("cmd").In("shell").Match("str")` | All | Command stdout matches `str` (explicit shell) | 5s poll |
+| `condition.Package("name")` | All | Referenced resource completed successfully | DAG engine (no poll) |
+| `condition.All(a, b, ...)` | All | All sub-conditions are met | Delegates to sub-conditions |
+| `condition.Any(a, b, ...)` | All | At least one sub-condition is met | Delegates to sub-conditions |
+| `condition.Not(a)` | All | Sub-condition is NOT met | Delegates to sub-condition |
 | `condition.NetworkInterface(name)` | All | Named interface exists and is up | netlink RTMGRP_LINK (Linux), NotifyIpInterfaceChange (Windows), 2s poll (macOS) |
 | `condition.NetworkReachable(host, port)` | All | TCP connect to host:port succeeds | 5s poll (no kernel event for TCP reachability) |
 | `condition.MountPoint(path)` | All | path is on a different device than its parent | inotify on /proc/self/mountinfo (Linux), kqueue on / (macOS), 5s poll (Windows) |

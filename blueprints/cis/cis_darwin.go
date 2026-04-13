@@ -2,7 +2,10 @@
 
 package cis
 
-import "github.com/TsekNet/converge/dsl"
+import (
+	"github.com/TsekNet/converge/condition"
+	"github.com/TsekNet/converge/dsl"
+)
 
 // DarwinCIS enforces CIS macOS L1 benchmark settings.
 // Based on CIS Apple macOS 26 Tahoe v1.0.0 L1 (90 items).
@@ -40,12 +43,12 @@ func cisFirewall(r *dsl.Run) {
 	r.Exec("enable-firewall", dsl.ExecOpts{
 		Command: "/usr/libexec/ApplicationFirewall/socketfilterfw",
 		Args:    []string{"--setglobalstate", "on"},
-		OnlyIf:  "/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate | grep -q enabled",
+		Condition: condition.Shell("/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate | grep -q enabled"),
 	})
 	r.Exec("enable-stealth", dsl.ExecOpts{
 		Command: "/usr/libexec/ApplicationFirewall/socketfilterfw",
 		Args:    []string{"--setstealthmode", "on"},
-		OnlyIf:  "/usr/libexec/ApplicationFirewall/socketfilterfw --getstealthmode | grep -q enabled",
+		Condition: condition.Shell("/usr/libexec/ApplicationFirewall/socketfilterfw --getstealthmode | grep -q enabled"),
 	})
 }
 
@@ -66,12 +69,12 @@ func cisSharing(r *dsl.Run) {
 	r.Exec("disable-remote-login", dsl.ExecOpts{
 		Command: "launchctl",
 		Args:    []string{"disable", "system/com.apple.sshd"},
-		OnlyIf:  "launchctl print system/com.apple.sshd 2>/dev/null | grep -q 'state = disabled'",
+		Condition: condition.Shell("launchctl print system/com.apple.sshd 2>/dev/null | grep -q 'state = disabled'"),
 	})
 	r.Exec("disable-remote-management", dsl.ExecOpts{
 		Command: "launchctl",
 		Args:    []string{"disable", "system/com.apple.remotemanagement"},
-		OnlyIf:  "launchctl print system/com.apple.remotemanagement 2>/dev/null | grep -q 'state = disabled'",
+		Condition: condition.Shell("launchctl print system/com.apple.remotemanagement 2>/dev/null | grep -q 'state = disabled'"),
 	})
 	r.Exec("disable-remote-apple-events", dsl.ExecOpts{
 		Command: "launchctl",
@@ -84,7 +87,7 @@ func cisSharing(r *dsl.Run) {
 	r.Exec("enable-time-service", dsl.ExecOpts{
 		Command: "systemsetup",
 		Args:    []string{"-setusingnetworktime", "on"},
-		OnlyIf:  "systemsetup -getusingnetworktime | grep -q 'On'",
+		Condition: condition.Shell("systemsetup -getusingnetworktime | grep -q 'On'"),
 	})
 }
 
@@ -126,18 +129,18 @@ func cisSecurity(r *dsl.Run) {
 	r.Exec("enable-gatekeeper", dsl.ExecOpts{
 		Command: "spctl",
 		Args:    []string{"--master-enable"},
-		OnlyIf:  "spctl --status 2>&1 | grep -q enabled",
+		Condition: condition.Shell("spctl --status 2>&1 | grep -q enabled"),
 	})
 	r.Exec("check-filevault", dsl.ExecOpts{
 		Command: "fdesetup",
 		Args:    []string{"status"},
-		OnlyIf:  "fdesetup status | grep -q 'FileVault is On'",
+		Condition: condition.Shell("fdesetup status | grep -q 'FileVault is On'"),
 	})
 	// CIS 2.6.8: require admin password for system-wide preference changes
 	r.Exec("require-admin-for-system-prefs", dsl.ExecOpts{
 		Command: "security",
 		Args:    []string{"authorizationdb", "write", "system.preferences", "authenticate-admin"},
-		OnlyIf:  "security authorizationdb read system.preferences 2>/dev/null | grep -q authenticate-admin",
+		Condition: condition.Shell("security authorizationdb read system.preferences 2>/dev/null | grep -q authenticate-admin"),
 	})
 	// CIS 2.13.x: disable guest account and guest access to shares
 	r.Plist("com.apple.loginwindow", dsl.PlistOpts{Key: "GuestEnabled", Value: false, Type: "bool", Host: true})
@@ -165,12 +168,12 @@ func cisMisc(r *dsl.Run) {
 	r.Exec("disable-powernap", dsl.ExecOpts{
 		Command: "pmset",
 		Args:    []string{"-a", "powernap", "0"},
-		OnlyIf:  "pmset -g | grep -q 'powernap.*0'",
+		Condition: condition.Shell("pmset -g | grep -q 'powernap.*0'"),
 	})
 	r.Exec("disable-wake-network", dsl.ExecOpts{
 		Command: "pmset",
 		Args:    []string{"-a", "womp", "0"},
-		OnlyIf:  "pmset -g | grep -q 'womp.*0'",
+		Condition: condition.Shell("pmset -g | grep -q 'womp.*0'"),
 	})
 	r.Plist("com.apple.NetworkBrowser", dsl.PlistOpts{Key: "DisableAirDrop", Value: true, Type: "bool", Host: true})
 	r.Plist("com.apple.controlcenter", dsl.PlistOpts{Key: "AirplayRecieverEnabled", Value: false, Type: "bool", Host: true})

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/TsekNet/converge/condition"
 	"github.com/TsekNet/converge/internal/graph"
 )
 
@@ -248,13 +249,13 @@ func TestRun_DuplicateResource(t *testing.T) {
 	}
 }
 
-func TestRun_DependsOn_MissingDep(t *testing.T) {
+func TestRun_ConditionResource_MissingDep(t *testing.T) {
 	t.Parallel()
 
 	run := newRun(New())
 	run.File("/etc/motd", FileOpts{
-		Content: "hello",
-		Meta:    Meta{DependsOn: []string{"package:nonexistent"}},
+		Content:   "hello",
+		Condition: condition.Package("nonexistent"),
 	})
 
 	if run.Err() == nil {
@@ -265,14 +266,14 @@ func TestRun_DependsOn_MissingDep(t *testing.T) {
 	}
 }
 
-func TestRun_DependsOn_Valid(t *testing.T) {
+func TestRun_ConditionResource_Valid(t *testing.T) {
 	t.Parallel()
 
 	run := newRun(New())
 	run.Package("nginx", PackageOpts{State: Present})
 	run.Service("nginx", ServiceOpts{
-		State: Running,
-		Meta:  Meta{DependsOn: []string{"package:nginx"}},
+		State:     Running,
+		Condition: condition.Package("nginx"),
 	})
 
 	if run.Err() != nil {
@@ -280,6 +281,24 @@ func TestRun_DependsOn_Valid(t *testing.T) {
 	}
 	if len(run.Resources()) != 2 {
 		t.Errorf("resource count = %d, want 2", len(run.Resources()))
+	}
+}
+
+func TestRun_ConditionResource_StrippedFromRuntime(t *testing.T) {
+	t.Parallel()
+
+	run := newRun(New())
+	run.Package("nginx", PackageOpts{State: Present})
+	run.File("/etc/nginx/nginx.conf", FileOpts{
+		Content: "server {}",
+		Condition: condition.All(
+			condition.Package("nginx"),
+			condition.FileExists("/etc/nginx"),
+		),
+	})
+
+	if run.Err() != nil {
+		t.Fatalf("unexpected error: %v", run.Err())
 	}
 }
 
