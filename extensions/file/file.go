@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/TsekNet/converge/extensions"
+	"github.com/TsekNet/converge/internal/shell"
 )
 
 // maxDownloadSize caps remote file downloads to prevent OOM from malicious servers.
@@ -29,6 +30,9 @@ var httpClient = &http.Client{
 		}
 		if req.URL.Host != via[0].URL.Host {
 			return fmt.Errorf("redirect to different host: %s", req.URL.Host)
+		}
+		if req.URL.Scheme != via[0].URL.Scheme {
+			return fmt.Errorf("redirect changes scheme: %s -> %s", via[0].URL.Scheme, req.URL.Scheme)
 		}
 		return nil
 	},
@@ -229,7 +233,12 @@ func (f *File) checkFull() (*extensions.State, error) {
 
 // applyFull writes the entire file content.
 func (f *File) applyFull() (*extensions.Result, error) {
-	dir := filepath.Dir(f.Path)
+	absPath, err := filepath.Abs(f.Path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
+	}
+
+	dir := filepath.Dir(absPath)
 	if err := f.fsys().MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
@@ -237,9 +246,9 @@ func (f *File) applyFull() (*extensions.Result, error) {
 	if f.Content != "" {
 		var content string
 		if f.Append {
-			existing, err := f.fsys().ReadFile(f.Path)
+			existing, err := f.fsys().ReadFile(absPath)
 			if err != nil && !isNotExist(err) {
-				return nil, fmt.Errorf("read %s: %w", f.Path, err)
+				return nil, fmt.Errorf("read %s: %w", absPath, err)
 			}
 			content = string(existing) + f.Content
 		} else {
@@ -250,14 +259,14 @@ func (f *File) applyFull() (*extensions.Result, error) {
 		if perm == 0 {
 			perm = 0644
 		}
-		if err := f.fsys().WriteFile(f.Path, []byte(content), perm); err != nil {
-			return nil, fmt.Errorf("write %s: %w", f.Path, err)
+		if err := f.fsys().WriteFile(absPath, []byte(content), perm); err != nil {
+			return nil, fmt.Errorf("write %s: %w", absPath, err)
 		}
 	}
 
 	if f.Mode != 0 {
-		if err := f.fsys().Chmod(f.Path, f.Mode); err != nil {
-			return nil, fmt.Errorf("chmod %s: %w", f.Path, err)
+		if err := f.fsys().Chmod(absPath, f.Mode); err != nil {
+			return nil, fmt.Errorf("chmod %s: %w", absPath, err)
 		}
 	}
 
@@ -314,7 +323,12 @@ func (f *File) checkRemote() (*extensions.State, error) {
 
 // applyRemote downloads the URL to the local path.
 func (f *File) applyRemote(ctx context.Context) (*extensions.Result, error) {
-	dir := filepath.Dir(f.Path)
+	absPath, err := filepath.Abs(f.Path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
+	}
+
+	dir := filepath.Dir(absPath)
 	if err := f.fsys().MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
@@ -326,20 +340,20 @@ func (f *File) applyRemote(ctx context.Context) (*extensions.Result, error) {
 
 	actual := sha256Hex(data)
 	if !strings.EqualFold(actual, f.Checksum) {
-		return nil, fmt.Errorf("checksum mismatch for %s: got %s, want %s", f.Path, actual, f.Checksum)
+		return nil, fmt.Errorf("checksum mismatch for %s: got %s, want %s", absPath, actual, f.Checksum)
 	}
 
 	perm := f.Mode
 	if perm == 0 {
 		perm = 0644
 	}
-	if err := f.fsys().WriteFile(f.Path, data, perm); err != nil {
-		return nil, fmt.Errorf("write %s: %w", f.Path, err)
+	if err := f.fsys().WriteFile(absPath, data, perm); err != nil {
+		return nil, fmt.Errorf("write %s: %w", absPath, err)
 	}
 
 	if f.Mode != 0 {
-		if err := f.fsys().Chmod(f.Path, f.Mode); err != nil {
-			return nil, fmt.Errorf("chmod %s: %w", f.Path, err)
+		if err := f.fsys().Chmod(absPath, f.Mode); err != nil {
+			return nil, fmt.Errorf("chmod %s: %w", absPath, err)
 		}
 	}
 
@@ -439,7 +453,7 @@ func (f *File) checkBlock() (*extensions.State, error) {
 	}
 	return &extensions.State{
 		InSync:  false,
-		Changes: []extensions.Change{{Property: "block", From: truncate(existing, 60), To: truncate(f.Content, 60), Action: action}},
+		Changes: []extensions.Change{{Property: "block", From: shell.Truncate(existing, 60), To: shell.Truncate(f.Content, 60), Action: action}},
 	}, nil
 }
 
@@ -606,15 +620,15 @@ func diffContent(old, new string) []extensions.Change {
 		}
 		if oldL == "" {
 			changes = append(changes, extensions.Change{
-				Property: fmt.Sprintf("line %d", i+1), To: truncate(newL, 60), Action: "add",
+				Property: fmt.Sprintf("line %d", i+1), To: shell.Truncate(newL, 60), Action: "add",
 			})
 		} else if newL == "" {
 			changes = append(changes, extensions.Change{
-				Property: fmt.Sprintf("line %d", i+1), From: truncate(oldL, 60), Action: "remove",
+				Property: fmt.Sprintf("line %d", i+1), From: shell.Truncate(oldL, 60), Action: "remove",
 			})
 		} else {
 			changes = append(changes, extensions.Change{
-				Property: fmt.Sprintf("line %d", i+1), From: truncate(oldL, 40), To: truncate(newL, 40), Action: "modify",
+				Property: fmt.Sprintf("line %d", i+1), From: shell.Truncate(oldL, 40), To: shell.Truncate(newL, 40), Action: "modify",
 			})
 		}
 		shown++
@@ -634,16 +648,7 @@ func summarizeContent(s string) string {
 	s = strings.TrimRight(s, "\n\r")
 	lines := strings.Count(s, "\n") + 1
 	if lines == 1 {
-		return truncate(s, 60)
+		return shell.Truncate(s, 60)
 	}
 	return fmt.Sprintf("%d lines, %d bytes", lines, len(s))
-}
-
-// TODO: extract to shared helper (duplicated in exec, template, repository)
-func truncate(s string, maxLen int) string {
-	s = strings.TrimRight(s, "\n\r")
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

@@ -127,10 +127,14 @@ func isModuleLoaded(module string) (bool, error) {
 	}
 	defer f.Close()
 
+	// Normalize hyphens to underscores: the kernel stores module names with
+	// underscores in /proc/modules, but users may specify either form.
+	normalized := strings.ReplaceAll(module, "-", "_")
+
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
-		if len(fields) > 0 && fields[0] == module {
+		if len(fields) > 0 && fields[0] == normalized {
 			return true, nil
 		}
 	}
@@ -194,7 +198,10 @@ func addToBlacklist(module string) error {
 	path := filepath.Join(modprobeDir, blacklistFile)
 	line := fmt.Sprintf("blacklist %s", module)
 
-	existing, _ := os.ReadFile(path)
+	existing, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
 	for _, l := range strings.Split(string(existing), "\n") {
 		if strings.TrimSpace(l) == line {
 			return nil // already blacklisted

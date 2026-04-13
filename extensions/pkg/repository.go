@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/TsekNet/converge/extensions"
+	"github.com/TsekNet/converge/internal/shell"
 )
 
 // Repository manages a package repository source. For apt, it writes to
@@ -61,6 +62,26 @@ func NewRepository(name string, opts RepositoryOpts) *Repository {
 	}
 }
 
+// validate rejects fields containing newline, carriage return, or null bytes.
+// These characters could inject additional repository lines or corrupt config files.
+func (r *Repository) validate() error {
+	const bad = "\n\r\x00"
+	for _, pair := range []struct {
+		name, value string
+	}{
+		{"Name", r.Name},
+		{"URI", r.URI},
+		{"Distribution", r.Distribution},
+		{"Components", r.Components},
+		{"GPGKey", r.GPGKey},
+	} {
+		if strings.ContainsAny(pair.value, bad) {
+			return fmt.Errorf("repository %s: %s contains invalid character (newline, carriage return, or null)", r.Name, pair.name)
+		}
+	}
+	return nil
+}
+
 func (r *Repository) ID() string       { return fmt.Sprintf("repository:%s", r.Name) }
 func (r *Repository) String() string   { return fmt.Sprintf("Repository %s (%s)", r.Name, r.ManagerName) }
 func (r *Repository) IsCritical() bool { return r.Critical }
@@ -108,6 +129,10 @@ func (r *Repository) repoContent() string {
 
 // Check compares the repo file on disk against desired state.
 func (r *Repository) Check(_ context.Context) (*extensions.State, error) {
+	if err := r.validate(); err != nil {
+		return nil, err
+	}
+
 	path := r.repoFilePath()
 	if path == "" {
 		return nil, fmt.Errorf("unsupported package manager for repositories: %q", r.ManagerName)
@@ -146,13 +171,17 @@ func (r *Repository) Check(_ context.Context) (*extensions.State, error) {
 	return &extensions.State{
 		InSync: false,
 		Changes: []extensions.Change{
-			{Property: "content", From: truncateStr(string(data), 60), To: truncateStr(desired, 60), Action: "modify"},
+			{Property: "content", From: shell.Truncate(string(data), 60), To: shell.Truncate(desired, 60), Action: "modify"},
 		},
 	}, nil
 }
 
 // Apply writes, updates, or removes the repository file.
 func (r *Repository) Apply(_ context.Context) (*extensions.Result, error) {
+	if err := r.validate(); err != nil {
+		return nil, err
+	}
+
 	path := r.repoFilePath()
 	if path == "" {
 		return nil, fmt.Errorf("unsupported package manager for repositories: %q", r.ManagerName)
@@ -175,11 +204,4 @@ func (r *Repository) Apply(_ context.Context) (*extensions.Result, error) {
 	}
 
 	return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "configured"}, nil
-}
-
-func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

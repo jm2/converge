@@ -118,6 +118,40 @@ func TestKernelModule_Check_Blacklisted(t *testing.T) {
 	}
 }
 
+func TestKernelModule_Check_Blacklisted_AlreadyDone(t *testing.T) {
+	ctx := context.Background()
+
+	// Use a module name that is virtually guaranteed to not exist and
+	// not be loaded. Check with State=Blacklisted expects: not loaded (good)
+	// but not blacklisted (need to add blacklist entry). We verify the
+	// Changes reflect only the missing blacklist, not an unload action.
+	k := New("converge_fake_module_xyz", Opts{State: Blacklisted})
+	state, err := k.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check() error: %v", err)
+	}
+	if state.InSync {
+		t.Error("should not be in sync: module is not blacklisted yet")
+	}
+
+	// The module is not loaded, so the only change should be adding the blacklist.
+	for _, c := range state.Changes {
+		if c.Property == "state" && c.From == "loaded" {
+			t.Error("should not request unload for a module that is not loaded")
+		}
+	}
+
+	foundBlacklist := false
+	for _, c := range state.Changes {
+		if c.Property == "blacklist" && c.Action == "add" {
+			foundBlacklist = true
+		}
+	}
+	if !foundBlacklist {
+		t.Errorf("expected a blacklist add change, got: %+v", state.Changes)
+	}
+}
+
 func TestKernelModule_Check_InvalidState(t *testing.T) {
 	ctx := context.Background()
 	k := &KernelModule{Module: "test", State: "invalid"}
@@ -127,3 +161,8 @@ func TestKernelModule_Check_InvalidState(t *testing.T) {
 		t.Error("Check() should fail with invalid state")
 	}
 }
+
+// TODO: Apply tests require root privileges and real modprobe, so they cannot
+// run in unit tests. Apply calls modprobe(8) for load/unload and writes to
+// /etc/modprobe.d/ for blacklisting. Integration tests that exercise Apply
+// should run under sudo in CI (see .github/ci/scripts/test-linux.sh).

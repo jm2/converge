@@ -72,5 +72,8 @@ func (c *Cron) validate() error {
 			return fmt.Errorf("cron %s: %s contains invalid character (newline, carriage return, or null)", c.Name, pair.name)
 		}
 	}
+	if strings.Contains(c.Name, "..") {
+		return fmt.Errorf("cron %s: Name contains path traversal sequence", c.Name)
+	}
 	return nil
 }

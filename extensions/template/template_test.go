@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/TsekNet/converge/internal/shell"
 	"github.com/TsekNet/converge/internal/testutil"
 )
 
@@ -278,8 +279,8 @@ func TestTruncate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			if got := truncate(tt.input, tt.max); got != tt.want {
-				t.Errorf("truncate(%q, %d) = %q, want %q", tt.input, tt.max, got, tt.want)
+			if got := shell.Truncate(tt.input, tt.max); got != tt.want {
+				t.Errorf("Truncate(%q, %d) = %q, want %q", tt.input, tt.max, got, tt.want)
 			}
 		})
 	}

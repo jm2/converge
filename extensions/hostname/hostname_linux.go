@@ -14,14 +14,6 @@ import (
 // Apply sets the hostname via the sethostname syscall and persists it
 // to /etc/hostname for survival across reboots.
 func (h *Hostname) Apply(_ context.Context) (*extensions.Result, error) {
-	match, err := h.alreadySet()
-	if err != nil {
-		return nil, err
-	}
-	if match {
-		return &extensions.Result{Changed: false, Status: extensions.StatusOK, Message: "already set"}, nil
-	}
-
 	if err := unix.Sethostname([]byte(h.Name)); err != nil {
 		return nil, fmt.Errorf("sethostname(%s): %w", h.Name, err)
 	}

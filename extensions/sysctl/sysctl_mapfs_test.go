@@ -89,3 +89,70 @@ func TestSysctl_MapFS_ApplyWithPersist(t *testing.T) {
 		t.Errorf("persist content = %q, want %q", data, "kernel.randomize_va_space = 2\n")
 	}
 }
+
+func TestSysctl_MapFS_PersistReadModifyWrite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mfs := testutil.NewMapFS()
+	// Pre-seed the persist file with an existing entry.
+	mfs.Set("/etc/sysctl.d/99-converge.conf", []byte("net.ipv4.ip_forward = 1\n"), 0644)
+	mfs.Set("/proc/sys/kernel/randomize_va_space", []byte("1\n"), 0644)
+
+	s := New("kernel.randomize_va_space", Opts{Value: "2", Persist: true, FS: mfs})
+	_, err := s.Apply(ctx)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	data, ok := mfs.Get("/etc/sysctl.d/99-converge.conf")
+	if !ok {
+		t.Fatal("persist file should exist")
+	}
+	want := "net.ipv4.ip_forward = 1\nkernel.randomize_va_space = 2\n"
+	if string(data) != want {
+		t.Errorf("persist content =\n%q\nwant\n%q", data, want)
+	}
+}
+
+func TestSysctl_MapFS_PersistUpdatesExistingKey(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mfs := testutil.NewMapFS()
+	mfs.Set("/etc/sysctl.d/99-converge.conf", []byte("net.ipv4.ip_forward = 0\nkernel.randomize_va_space = 1\n"), 0644)
+	mfs.Set("/proc/sys/net/ipv4/ip_forward", []byte("0\n"), 0644)
+
+	s := New("net.ipv4.ip_forward", Opts{Value: "1", Persist: true, FS: mfs})
+	_, err := s.Apply(ctx)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	data, ok := mfs.Get("/etc/sysctl.d/99-converge.conf")
+	if !ok {
+		t.Fatal("persist file should exist")
+	}
+	want := "net.ipv4.ip_forward = 1\nkernel.randomize_va_space = 1\n"
+	if string(data) != want {
+		t.Errorf("persist content =\n%q\nwant\n%q", data, want)
+	}
+}
+
+func TestSysctl_MapFS_ValidateRejectsInvalidKey(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mfs := testutil.NewMapFS()
+	s := New("net..ipv4", Opts{Value: "1", FS: mfs})
+
+	_, err := s.Check(ctx)
+	if err == nil {
+		t.Error("Check() should reject key with '..'")
+	}
+
+	_, err = s.Apply(ctx)
+	if err == nil {
+		t.Error("Apply() should reject key with '..'")
+	}
+}

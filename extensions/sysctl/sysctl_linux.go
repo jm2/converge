@@ -4,17 +4,27 @@ package sysctl
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 
 	"github.com/TsekNet/converge/extensions"
 )
 
+func isNotExist(err error) bool {
+	return errors.Is(err, fs.ErrNotExist)
+}
+
 const procSysBase = "/proc/sys"
 
 // Check reads the live kernel value from /proc/sys/<key> and compares it.
 func (s *Sysctl) Check(_ context.Context) (*extensions.State, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+
 	current, err := s.read()
 	if err != nil {
 		return nil, fmt.Errorf("read sysctl %s: %w", s.Key, err)
@@ -38,6 +48,10 @@ func (s *Sysctl) Check(_ context.Context) (*extensions.State, error) {
 // Apply writes the value to /proc/sys/ for immediate effect, then optionally
 // persists it to /etc/sysctl.d/99-converge.conf so it survives reboots.
 func (s *Sysctl) Apply(_ context.Context) (*extensions.Result, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+
 	p := keyToPath(s.Key)
 	if err := s.fsys().WriteFile(p, []byte(s.Value+"\n"), 0644); err != nil {
 		return nil, fmt.Errorf("write sysctl %s: %w", s.Key, err)
@@ -65,8 +79,35 @@ func (s *Sysctl) writePersist() error {
 	if err := s.fsys().MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	line := fmt.Sprintf("%s = %s\n", s.Key, s.Value)
-	return s.fsys().WriteFile(filepath.Join(dir, "99-converge.conf"), []byte(line), 0644)
+
+	confPath := filepath.Join(dir, "99-converge.conf")
+	prefix := s.Key + " = "
+	newLine := fmt.Sprintf("%s = %s", s.Key, s.Value)
+
+	existing, err := s.fsys().ReadFile(confPath)
+	if err != nil && !isNotExist(err) {
+		return fmt.Errorf("read %s: %w", confPath, err)
+	}
+
+	var lines []string
+	if len(existing) > 0 {
+		lines = strings.Split(strings.TrimRight(string(existing), "\n"), "\n")
+	}
+
+	found := false
+	for i, l := range lines {
+		if strings.HasPrefix(l, prefix) {
+			lines[i] = newLine
+			found = true
+			break
+		}
+	}
+	if !found {
+		lines = append(lines, newLine)
+	}
+
+	content := strings.Join(lines, "\n") + "\n"
+	return s.fsys().WriteFile(confPath, []byte(content), 0644)
 }
 
 // keyToPath converts "net.ipv4.ip_forward" to "/proc/sys/net/ipv4/ip_forward".

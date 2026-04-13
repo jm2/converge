@@ -43,6 +43,40 @@ func TestSysctl_New_Defaults(t *testing.T) {
 	}
 }
 
+func TestSysctl_Validate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		key     string
+		wantErr bool
+	}{
+		{"valid dotted key", "net.ipv4.ip_forward", false},
+		{"valid with hyphen", "net.ipv4.conf.all.rp-filter", false},
+		{"valid single segment", "hostname", false},
+		{"path traversal double dot", "net..ipv4.ip_forward", true},
+		{"leading double dot", "..secret", true},
+		{"shell metachar semicolon", "net.ipv4;rm -rf /", true},
+		{"space in key", "net.ipv4 .ip_forward", true},
+		{"slash in key", "net/ipv4", true},
+		{"empty key", "", true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := New(tt.key, Opts{Value: "1"})
+			err := s.validate()
+			if tt.wantErr && err == nil {
+				t.Errorf("validate(%q) = nil, want error", tt.key)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("validate(%q) = %v, want nil", tt.key, err)
+			}
+		})
+	}
+}
+
 func TestSysctl_Check_ReadOnly(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("sysctl Check requires /proc/sys (linux only)")

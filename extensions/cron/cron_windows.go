@@ -45,6 +45,7 @@ func (c *Cron) Check(_ context.Context) (*extensions.State, error) {
 		}, nil
 	}
 
+	// TODO: retrieve task action and trigger via COM to compare against c.Command/c.Schedule
 	return &extensions.State{InSync: true}, nil
 }
 

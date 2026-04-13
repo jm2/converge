@@ -252,3 +252,39 @@ func TestRepository_MapFS_AptCheckAndApply(t *testing.T) {
 		t.Errorf("content = %q", data)
 	}
 }
+
+func TestRepository_MapFS_DnfCheckAndApply(t *testing.T) {
+	mfs := testutil.NewMapFS()
+
+	r := NewRepository("epel", RepositoryOpts{
+		URI:         "https://epel.example.com/9/x86_64/",
+		ManagerName: "dnf",
+		Enabled:     true,
+		GPGKey:      "https://epel.example.com/RPM-GPG-KEY-EPEL-9",
+		FS:          mfs,
+	})
+	testutil.AssertConverges(t, r)
+
+	data, ok := mfs.Get("/etc/yum.repos.d/epel.repo")
+	if !ok {
+		t.Fatal("repo file should exist in MapFS")
+	}
+
+	content := string(data)
+	checks := []struct {
+		substr string
+		desc   string
+	}{
+		{"[epel]", "section header"},
+		{"name=epel", "name field"},
+		{"baseurl=https://epel.example.com/9/x86_64/", "baseurl"},
+		{"enabled=1", "enabled flag"},
+		{"gpgcheck=1", "gpgcheck flag"},
+		{"gpgkey=https://epel.example.com/RPM-GPG-KEY-EPEL-9", "gpgkey"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(content, c.substr) {
+			t.Errorf("content missing %s (%q), got: %s", c.desc, c.substr, content)
+		}
+	}
+}

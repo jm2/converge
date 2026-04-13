@@ -20,8 +20,9 @@ type MapFS struct {
 }
 
 type memFile struct {
-	data []byte
-	mode fs.FileMode
+	data  []byte
+	mode  fs.FileMode
+	isDir bool
 }
 
 // Compile-time check.
@@ -39,7 +40,7 @@ func (m *MapFS) Stat(name string) (fs.FileInfo, error) {
 	if !ok {
 		return nil, &os.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
 	}
-	return &memFileInfo{name: filepath.Base(name), size: int64(len(f.data)), mode: f.mode}, nil
+	return &memFileInfo{name: filepath.Base(name), size: int64(len(f.data)), mode: f.mode, isDir: f.isDir}, nil
 }
 
 func (m *MapFS) ReadFile(name string) ([]byte, error) {
@@ -63,8 +64,26 @@ func (m *MapFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	return nil
 }
 
-func (m *MapFS) MkdirAll(_ string, _ fs.FileMode) error {
-	return nil // directories are implicit in a flat map
+func (m *MapFS) MkdirAll(path string, perm fs.FileMode) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Walk each component and create directory entries so Stat/IsDir work.
+	parts := strings.Split(filepath.Clean(path), string(filepath.Separator))
+	cur := ""
+	for _, p := range parts {
+		if p == "" {
+			cur = string(filepath.Separator)
+			continue
+		}
+		cur = filepath.Join(cur, p)
+		if !strings.HasPrefix(cur, string(filepath.Separator)) {
+			cur = string(filepath.Separator) + cur
+		}
+		if _, ok := m.files[cur]; !ok {
+			m.files[cur] = &memFile{mode: perm | fs.ModeDir, isDir: true}
+		}
+	}
+	return nil
 }
 
 func (m *MapFS) Chmod(name string, mode fs.FileMode) error {
@@ -116,14 +135,15 @@ func (m *MapFS) Has(name string) bool {
 
 // memFileInfo implements fs.FileInfo for in-memory files.
 type memFileInfo struct {
-	name string
-	size int64
-	mode fs.FileMode
+	name  string
+	size  int64
+	mode  fs.FileMode
+	isDir bool
 }
 
-func (fi *memFileInfo) Name() string      { return fi.name }
-func (fi *memFileInfo) Size() int64       { return fi.size }
-func (fi *memFileInfo) Mode() fs.FileMode { return fi.mode }
+func (fi *memFileInfo) Name() string       { return fi.name }
+func (fi *memFileInfo) Size() int64        { return fi.size }
+func (fi *memFileInfo) Mode() fs.FileMode  { return fi.mode }
 func (fi *memFileInfo) ModTime() time.Time { return time.Time{} }
-func (fi *memFileInfo) IsDir() bool       { return strings.HasSuffix(fi.name, "/") }
-func (fi *memFileInfo) Sys() any          { return nil }
+func (fi *memFileInfo) IsDir() bool        { return fi.isDir }
+func (fi *memFileInfo) Sys() any           { return nil }
