@@ -13,6 +13,7 @@ import (
 	"text/template"
 
 	"github.com/TsekNet/converge/extensions"
+	"github.com/TsekNet/converge/internal/shell"
 )
 
 // Template renders a Go text/template to a file and ensures the file
@@ -91,7 +92,7 @@ func (t *Template) Check(_ context.Context) (*extensions.State, error) {
 			InSync: false,
 			Changes: []extensions.Change{
 				{Property: "state", To: "create", Action: "add"},
-				{Property: "content", To: truncate(rendered, 80), Action: "add"},
+				{Property: "content", To: shell.Truncate(rendered, 80), Action: "add"},
 			},
 		}, nil
 	}
@@ -108,8 +109,8 @@ func (t *Template) Check(_ context.Context) (*extensions.State, error) {
 	if string(existing) != rendered {
 		changes = append(changes, extensions.Change{
 			Property: "content",
-			From:     truncate(string(existing), 80),
-			To:       truncate(rendered, 80),
+			From:     shell.Truncate(string(existing), 80),
+			To:       shell.Truncate(rendered, 80),
 			Action:   "modify",
 		})
 	}
@@ -153,11 +154,4 @@ func (t *Template) Apply(_ context.Context) (*extensions.Result, error) {
 	}
 
 	return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "rendered"}, nil
-}
-
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

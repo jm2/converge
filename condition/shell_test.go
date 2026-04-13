@@ -40,18 +40,19 @@ func TestShell_Met_OutputMatch(t *testing.T) {
 		command string
 		expect  string
 		wantMet bool
+		wantErr bool
 	}{
-		{"output matches", "echo -n hello", "hello", true},
-		{"output differs", "echo -n world", "hello", false},
-		{"trailing newline trimmed", "echo hello", "hello", true},
-		{"command fails, no match", "false", "hello", false},
+		{"output matches", "echo -n hello", "hello", true, false},
+		{"output differs", "echo -n world", "hello", false, false},
+		{"trailing newline trimmed", "echo hello", "hello", true, false},
+		{"command fails, returns error", "false", "hello", false, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := Shell(tt.command).In("bash").Match(tt.expect)
 			met, err := c.Met(ctx)
-			if err != nil {
-				t.Fatalf("Met() error = %v", err)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Met() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if met != tt.wantMet {
 				t.Errorf("Met() = %v, want %v", met, tt.wantMet)

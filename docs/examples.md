@@ -349,7 +349,7 @@ All option structs share these common fields directly on each Opts struct:
 
 **Auto-edges:** Dependencies are detected automatically: `service:X` depends on `package:X`, files depend on parent directories, services depend on config files. Use typed resource conditions (e.g. `condition.Package`, `condition.File`) for dependencies auto-edges cannot detect.
 
-**Auto-grouping:** Package resources with the same manager and state are automatically batched into a single install/remove transaction (e.g., `apt install git curl neovim` instead of three separate calls). Set `AutoGroup` to a `*bool` pointing to `false` to opt out (e.g., `falseVal := false; Meta{AutoGroup: &falseVal}`).
+**Auto-grouping:** Package resources with the same manager and state are automatically batched into a single install/remove transaction (e.g., `apt install git curl neovim` instead of three separate calls). Set `AutoGroup` to a `*bool` pointing to `false` to opt out (e.g., `falseVal := false; dsl.PackageOpts{State: dsl.Present, AutoGroup: &falseVal}`).
 
 Use typed resource conditions (e.g. `condition.Package`, `condition.File`) for dependencies auto-edges cannot detect:
 
@@ -555,7 +555,7 @@ r.Exec(name string, opts dsl.ExecOpts)
 | `Retries` | `int` | `0` | Number of retry attempts on failure. |
 | `RetryDelay` | `time.Duration` | `0` | Delay between retries. |
 
-**Idempotency:** Not inherently idempotent. Always use `condition.Shell("...")` on `Meta.Condition` to make it conditional.
+**Idempotency:** Not inherently idempotent. Always use `condition.Shell("...")` on the `Condition` field to make it conditional.
 
 **Examples:**
 
@@ -1388,4 +1388,5 @@ r.Exec("complex-gate", dsl.ExecOpts{
 | `condition.RegistryValueExists(key, value)` | Windows | Named value exists under key | RegNotifyChangeKeyValue on nearest existing ancestor |
 | `condition.RegistryValueEquals(key, value, data)` | Windows | Named value's data equals the string form of data | RegNotifyChangeKeyValue on nearest existing ancestor |
 
+All resource types have typed constructors. See [condition/resource.go](../condition/resource.go) for the full list.
 

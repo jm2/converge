@@ -94,7 +94,9 @@ func Run(ctx context.Context, shell, command string, customParams []string) (std
 }
 
 // Truncate shortens a string for display in change descriptions.
+// Trailing newlines and carriage returns are stripped before measuring.
 func Truncate(s string, maxLen int) string {
+	s = strings.TrimRight(s, "\n\r")
 	if len(s) <= maxLen {
 		return s
 	}
@@ -108,16 +110,6 @@ func IsPowerShell(shell string) bool {
 		resolved = PowerShell
 	}
 	return resolved == PowerShell || resolved == Pwsh
-}
-
-// DirectCommand builds an exec.Cmd for a direct (no-shell) command string,
-// splitting on whitespace.
-func DirectCommand(ctx context.Context, command string) *exec.Cmd {
-	parts := strings.Fields(command)
-	if len(parts) == 0 {
-		return exec.CommandContext(ctx, command)
-	}
-	return exec.CommandContext(ctx, parts[0], parts[1:]...)
 }
 
 // FormatOutput returns a human-readable description of command output for

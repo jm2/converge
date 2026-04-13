@@ -14,18 +14,12 @@ import (
 
 // sysSetHostname is the Darwin syscall number for sethostname(2).
 // From XNU bsd/kern/syscalls.master: 88 = sethostname.
+// golang.org/x/sys/unix does not expose Sethostname on darwin (only linux,
+// aix, solaris), so a raw Syscall with unsafe.Pointer is required here.
 const sysSetHostname = 88
 
 // Apply sets the hostname via the sethostname(2) syscall on macOS.
 func (h *Hostname) Apply(_ context.Context) (*extensions.Result, error) {
-	match, err := h.alreadySet()
-	if err != nil {
-		return nil, err
-	}
-	if match {
-		return &extensions.Result{Changed: false, Status: extensions.StatusOK, Message: "already set"}, nil
-	}
-
 	name := []byte(h.Name)
 	_, _, errno := unix.Syscall(
 		sysSetHostname,

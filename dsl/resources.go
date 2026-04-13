@@ -15,6 +15,12 @@ import (
 )
 
 func newFileExtension(path string, opts FileOpts) extensions.Extension {
+	state := ""
+	if opts.State == Absent {
+		state = "absent"
+	} else if opts.State == Present {
+		state = "present"
+	}
 	return extfile.New(path, extfile.Opts{
 		Content:      opts.Content,
 		Mode:         opts.Mode,
@@ -25,6 +31,7 @@ func newFileExtension(path string, opts FileOpts) extensions.Extension {
 		Checksum:     opts.Checksum,
 		BlockName:    opts.BlockName,
 		BlockComment: opts.BlockComment,
+		State:        state,
 		Critical:     opts.Critical,
 	})
 }

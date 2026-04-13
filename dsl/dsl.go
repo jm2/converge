@@ -47,6 +47,7 @@ type FileOpts struct {
 	Checksum     string // expected SHA-256 hex digest (only with URL)
 	BlockName    string // when set, manages a tagged block within the file instead of owning the entire file
 	BlockComment string // comment prefix for block markers (default: "#")
+	State        ResourceState
 	Critical     bool
 	Noop         bool
 	Retry        int
@@ -87,11 +88,11 @@ type ExecOpts struct {
 	ShellParams []string // when set, replaces default shell flags
 	Dir         string
 	Env         []string
-	Retries     int
-	RetryDelay  time.Duration
+	Retries     int           // exec-specific: retries within a single Apply call
+	RetryDelay  time.Duration // delay between exec-specific retries
 	Critical    bool
 	Noop        bool
-	Retry       int
+	Retry       int // engine-level: how many times the daemon retries after Check/Apply failure
 	Limit       float64
 	AutoEdge    *bool
 	AutoGroup   *bool

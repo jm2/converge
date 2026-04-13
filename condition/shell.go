@@ -49,6 +49,9 @@ func (c *shellCondition) Met(ctx context.Context) (bool, error) {
 	stdout, err := shell.Run(ctx, c.shellName, c.command, nil)
 
 	if c.expectedOutput != "" {
+		if err != nil {
+			return false, err
+		}
 		return stdout == c.expectedOutput, nil
 	}
 

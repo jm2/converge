@@ -2,9 +2,13 @@ package sysctl
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/TsekNet/converge/extensions"
 )
+
+var validKeyRe = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
 // Sysctl manages a Linux kernel parameter. Check reads from /proc/sys/,
 // Apply writes the value and optionally persists it to /etc/sysctl.d/.
@@ -35,6 +39,17 @@ func New(key string, opts Opts) *Sysctl {
 }
 
 func (s *Sysctl) fsys() extensions.FS { return extensions.RealFS(s.FS) }
+
+// validate checks that Key contains only safe characters and no path traversal.
+func (s *Sysctl) validate() error {
+	if !validKeyRe.MatchString(s.Key) {
+		return fmt.Errorf("sysctl key %q contains invalid characters", s.Key)
+	}
+	if strings.Contains(s.Key, "..") {
+		return fmt.Errorf("sysctl key %q contains path traversal", s.Key)
+	}
+	return nil
+}
 
 func (s *Sysctl) ID() string       { return fmt.Sprintf("sysctl:%s", s.Key) }
 func (s *Sysctl) String() string   { return fmt.Sprintf("Sysctl %s = %s", s.Key, s.Value) }

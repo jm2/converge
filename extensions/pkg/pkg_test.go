@@ -143,6 +143,7 @@ func TestDetectManager(t *testing.T) {
 		{"apk", false},
 		{"pacman", false},
 		{"winget", false},
+		{"snap", false},
 		{"unknown", true},
 		{"", true},
 	}
@@ -170,6 +171,7 @@ func TestManagerNames(t *testing.T) {
 		{"apk", "apk"},
 		{"pacman", "pacman"},
 		{"winget", "winget"},
+		{"snap", "snap"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.managerName, func(t *testing.T) {
