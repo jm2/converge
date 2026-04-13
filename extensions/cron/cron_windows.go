@@ -19,13 +19,13 @@ func (c *Cron) Check(_ context.Context) (*extensions.State, error) {
 		return nil, err
 	}
 
-	exists, err := taskExists(c.Name)
+	info, err := getTaskInfo(c.Name)
 	if err != nil {
 		return nil, fmt.Errorf("query task %s: %w", c.Name, err)
 	}
 
 	if c.State == "absent" {
-		if !exists {
+		if !info.exists {
 			return &extensions.State{InSync: true}, nil
 		}
 		return &extensions.State{
@@ -36,7 +36,7 @@ func (c *Cron) Check(_ context.Context) (*extensions.State, error) {
 		}, nil
 	}
 
-	if !exists {
+	if !info.exists {
 		return &extensions.State{
 			InSync: false,
 			Changes: []extensions.Change{
@@ -45,8 +45,17 @@ func (c *Cron) Check(_ context.Context) (*extensions.State, error) {
 		}, nil
 	}
 
-	// TODO: retrieve task action and trigger via COM to compare against c.Command/c.Schedule
-	return &extensions.State{InSync: true}, nil
+	var changes []extensions.Change
+	if info.command != c.Command {
+		changes = append(changes, extensions.Change{
+			Property: "command",
+			From:     info.command,
+			To:       c.Command,
+			Action:   "modify",
+		})
+	}
+
+	return &extensions.State{InSync: len(changes) == 0, Changes: changes}, nil
 }
 
 // Apply creates or removes a Windows scheduled task via the Task Scheduler COM API.
@@ -101,9 +110,15 @@ func withTaskService(fn func(service *ole.IDispatch) error) error {
 	return fn(service)
 }
 
-// taskExists checks whether a task with the given name exists in the root folder.
-func taskExists(name string) (bool, error) {
-	var exists bool
+// taskInfo holds the properties of an existing scheduled task.
+type taskInfo struct {
+	exists  bool
+	command string // Action Path from the first exec action
+}
+
+// getTaskInfo retrieves the task's existence and configured command.
+func getTaskInfo(name string) (taskInfo, error) {
+	var info taskInfo
 	err := withTaskService(func(service *ole.IDispatch) error {
 		folder, err := oleutil.CallMethod(service, "GetFolder", `\`)
 		if err != nil {
@@ -112,11 +127,44 @@ func taskExists(name string) (bool, error) {
 		folderDisp := folder.ToIDispatch()
 		defer folderDisp.Release()
 
-		_, err = oleutil.CallMethod(folderDisp, "GetTask", name)
-		exists = err == nil
+		taskResult, err := oleutil.CallMethod(folderDisp, "GetTask", name)
+		if err != nil {
+			return nil // task does not exist
+		}
+		info.exists = true
+		taskDisp := taskResult.ToIDispatch()
+		defer taskDisp.Release()
+
+		// task.Definition.Actions.Item(1).Path
+		defResult, err := oleutil.GetProperty(taskDisp, "Definition")
+		if err != nil {
+			return nil // can't read definition, treat as exists-only
+		}
+		defDisp := defResult.ToIDispatch()
+		defer defDisp.Release()
+
+		actionsResult, err := oleutil.GetProperty(defDisp, "Actions")
+		if err != nil {
+			return nil
+		}
+		actionsDisp := actionsResult.ToIDispatch()
+		defer actionsDisp.Release()
+
+		actionResult, err := oleutil.GetProperty(actionsDisp, "Item", 1)
+		if err != nil {
+			return nil
+		}
+		actionDisp := actionResult.ToIDispatch()
+		defer actionDisp.Release()
+
+		pathResult, err := oleutil.GetProperty(actionDisp, "Path")
+		if err != nil {
+			return nil
+		}
+		info.command = pathResult.ToString()
 		return nil
 	})
-	return exists, err
+	return info, err
 }
 
 // createTask registers a new task using the Task Scheduler 2.0 COM API.
