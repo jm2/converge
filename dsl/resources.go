@@ -33,6 +33,7 @@ func newFileExtension(path string, opts FileOpts) extensions.Extension {
 		BlockComment: opts.BlockComment,
 		State:        state,
 		Critical:     opts.Critical,
+		Sensitive:    opts.Sensitive,
 	})
 }
 

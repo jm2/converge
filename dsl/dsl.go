@@ -49,6 +49,7 @@ type FileOpts struct {
 	BlockComment string // comment prefix for block markers (default: "#")
 	State        ResourceState
 	Critical     bool
+	Sensitive    bool // redact content from Check diffs (e.g. secret-bearing files)
 	Noop         bool
 	Retry        int
 	Limit        float64

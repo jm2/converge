@@ -57,6 +57,7 @@ type File struct {
 	BlockComment string // comment prefix for block markers (default: "#")
 	State        string // "present" or "absent" (absent removes the file, or the block in block mode)
 	Critical     bool
+	Sensitive    bool          // when true, redact content from Check diffs (e.g. secret-bearing files)
 	FS           extensions.FS // nil uses the real OS filesystem
 }
 
@@ -73,6 +74,7 @@ type Opts struct {
 	BlockComment string // comment prefix for block markers (default: "#")
 	State        string // "present" or "absent" (absent removes the file, or the block in block mode)
 	Critical     bool
+	Sensitive    bool          // when true, redact content from Check diffs (e.g. secret-bearing files)
 	FS           extensions.FS // inject a mock for testing
 }
 
@@ -98,6 +100,7 @@ func New(path string, opts Opts) *File {
 		BlockComment: comment,
 		State:        state,
 		Critical:     opts.Critical,
+		Sensitive:    opts.Sensitive,
 		FS:           opts.FS,
 	}
 }
@@ -212,6 +215,16 @@ func (f *File) Apply(ctx context.Context) (*extensions.Result, error) {
 	}
 }
 
+// contentForChange renders the desired content for a Change, redacting it when
+// the file is marked Sensitive so secret-bearing content never leaks into
+// plan/JSON/log output.
+func (f *File) contentForChange() string {
+	if f.Sensitive {
+		return fmt.Sprintf("(sensitive, %d bytes)", len(f.Content))
+	}
+	return summarizeContent(f.Content)
+}
+
 // checkFull compares the entire file content against desired state.
 func (f *File) checkFull() (*extensions.State, error) {
 	absPath, err := filepath.Abs(f.Path)
@@ -233,7 +246,7 @@ func (f *File) checkFull() (*extensions.State, error) {
 	if isNotExist(err) {
 		changes := []extensions.Change{
 			{Property: "state", To: "create", Action: "add"},
-			{Property: "content", To: summarizeContent(f.Content), Action: "add"},
+			{Property: "content", To: f.contentForChange(), Action: "add"},
 		}
 		if f.Mode != 0 {
 			changes = append(changes, extensions.Change{
@@ -254,7 +267,11 @@ func (f *File) checkFull() (*extensions.State, error) {
 			return nil, fmt.Errorf("read %s: %w", absPath, err)
 		}
 		if string(existing) != f.Content {
-			changes = append(changes, diffContent(string(existing), f.Content)...)
+			if f.Sensitive {
+				changes = append(changes, extensions.Change{Property: "content", From: "(sensitive)", To: "(sensitive)", Action: "modify"})
+			} else {
+				changes = append(changes, diffContent(string(existing), f.Content)...)
+			}
 		}
 	}
 
