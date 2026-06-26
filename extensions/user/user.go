@@ -75,9 +75,58 @@ func (u *User) Check(_ context.Context) (*extensions.State, error) {
 		}
 	}
 
+	// Diff desired group membership against current membership. Membership is
+	// read via os/user (which works on Linux, macOS, and Windows); if it cannot
+	// be read we skip the diff rather than report a false positive.
+	if len(u.Groups) > 0 {
+		if current, err := userGroups(existing); err == nil {
+			if missing := missingGroups(u.Groups, current); len(missing) > 0 {
+				changes = append(changes, extensions.Change{
+					Property: "groups", To: strings.Join(missing, ","), Action: "add",
+				})
+			}
+		}
+	}
+
 	return &extensions.State{InSync: len(changes) == 0, Changes: changes}, nil
 }
 
 func lookupUser(name string) (*user.User, error) {
 	return user.Lookup(name)
+}
+
+// userGroups returns the names of the groups the user is a member of. It
+// resolves group IDs to names where possible, falling back to the raw ID.
+func userGroups(existing *user.User) ([]string, error) {
+	ids, err := existing.GroupIds()
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if g, err := user.LookupGroupId(id); err == nil {
+			names = append(names, g.Name)
+		} else {
+			names = append(names, id)
+		}
+	}
+	return names, nil
+}
+
+// missingGroups returns the desired groups that are not present in current.
+func missingGroups(desired, current []string) []string {
+	if len(desired) == 0 {
+		return nil
+	}
+	have := make(map[string]bool, len(current))
+	for _, g := range current {
+		have[g] = true
+	}
+	var missing []string
+	for _, g := range desired {
+		if !have[g] {
+			missing = append(missing, g)
+		}
+	}
+	return missing
 }

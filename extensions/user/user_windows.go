@@ -39,9 +39,10 @@ type localGroupMembersInfo3 struct {
 }
 
 const (
-	userPrivUser    = 1
-	ufScript        = 0x0001
-	ufNormalAccount = 0x0200
+	userPrivUser     = 1
+	ufScript         = 0x0001
+	ufAccountDisable = 0x0002
+	ufNormalAccount  = 0x0200
 )
 
 // Apply creates or modifies the user via Win32 NetUserAdd / NetLocalGroupAddMembers.
@@ -55,14 +56,18 @@ func (u *User) Apply(_ context.Context) (*extensions.Result, error) {
 
 func (u *User) createUser() (*extensions.Result, error) {
 	namePtr, _ := syscall.UTF16PtrFromString(u.Name)
-	// Empty password: the user must set it later.
+	// The account is created with a blank password. To avoid leaving an
+	// immediately usable account with no password, it is created DISABLED
+	// (UF_ACCOUNTDISABLE). An administrator must set a password and explicitly
+	// enable the account (e.g. via `net user <name> <password>` and
+	// `net user <name> /active:yes`) before it can be used to log in.
 	passPtr, _ := syscall.UTF16PtrFromString("")
 
 	info := userInfo1{
 		Name:     namePtr,
 		Password: passPtr,
 		Priv:     userPrivUser,
-		Flags:    ufScript | ufNormalAccount,
+		Flags:    ufScript | ufNormalAccount | ufAccountDisable,
 	}
 
 	var paramErr uint32
