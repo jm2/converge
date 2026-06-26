@@ -12,12 +12,13 @@ import (
 )
 
 type mockExtension struct {
-	id          string
-	name        string
-	inSync      bool
-	applyErr    error
-	checkErr    error
-	applyCalled bool
+	id             string
+	name           string
+	inSync         bool
+	applyErr       error
+	checkErr       error
+	applyCalled    bool
+	staysOutOfSync bool // if set, Apply "succeeds" but never converges
 }
 
 func (m *mockExtension) ID() string     { return m.id }
@@ -34,6 +35,12 @@ func (m *mockExtension) Apply(_ context.Context) (*extensions.Result, error) {
 	m.applyCalled = true
 	if m.applyErr != nil {
 		return nil, m.applyErr
+	}
+	// A converging resource is in sync after a successful Apply. The engine
+	// re-Checks to confirm this; a resource that stays out of sync is reported
+	// as a convergence failure.
+	if !m.staysOutOfSync {
+		m.inSync = true
 	}
 	return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "applied"}, nil
 }
@@ -190,6 +197,24 @@ func TestRunApplyDAG_ConditionGate(t *testing.T) {
 	}
 	if code != 2 {
 		t.Errorf("exit code = %d, want 2 (changed)", code)
+	}
+}
+
+// TestRunApplyDAG_ConvergenceFailure verifies the engine re-Checks after a
+// successful Apply: a resource that reports success but remains out of sync is
+// reported as failed, not as a change.
+func TestRunApplyDAG_ConvergenceFailure(t *testing.T) {
+	t.Parallel()
+
+	g := makeGraph(
+		&mockExtension{id: "exec:bad", name: "Exec bad", inSync: false, staysOutOfSync: true},
+	)
+	code, err := RunApplyDAG(context.Background(), g, &discardPrinter{}, DefaultOptions())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if code != 4 { // AllFailed: the only resource failed to converge.
+		t.Errorf("exit code = %d, want 4 (convergence failure)", code)
 	}
 }
 

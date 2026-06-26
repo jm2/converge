@@ -126,6 +126,22 @@ func applyOne(ctx context.Context, r extensions.Extension, timeout time.Duration
 	}
 	result.Duration = time.Since(start)
 	result.Changes = changes
+
+	// Verify convergence: re-Check after a successful Apply. A resource that
+	// reports success but is still out of sync did not actually converge, so
+	// report it as a failure rather than masking the drift as success.
+	rctx, cancel = withTimeout(ctx, timeout)
+	newState, checkErr := r.Check(rctx)
+	cancel()
+	if checkErr == nil && newState != nil && !newState.InSync {
+		return applyResult{r, &extensions.Result{
+			Status:   extensions.StatusFailed,
+			Err:      fmt.Errorf("%s still out of sync after apply", r.ID()),
+			Duration: time.Since(start),
+			Changes:  changes,
+		}}
+	}
+
 	return applyResult{r, result}
 }
 
