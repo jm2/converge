@@ -94,11 +94,12 @@ func (rm *retryManager) shouldProcess(id string, kind extensions.EventKind) bool
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// During backoff, skip poll events.
-	if s.compliance == Converging && kind == extensions.EventPoll {
-		return false
-	}
-	// During backoff window, only process scheduled retries.
+	// During the active backoff window, only process scheduled retries; this
+	// avoids hammering a resource that is already waiting to retry. Once the
+	// window has elapsed, poll/watch events are allowed through again. This is
+	// the backstop that guarantees a poll-only resource stuck Converging gets a
+	// reliable wakeup even if its scheduled retry event was lost: its next poll
+	// re-triggers convergence rather than being suppressed indefinitely.
 	if !s.nextRetry.IsZero() && time.Now().Before(s.nextRetry) && kind != extensions.EventRetry {
 		return false
 	}

@@ -300,6 +300,79 @@ func TestDaemon_RetryResetsOnSuccess(t *testing.T) {
 	}
 }
 
+// TestDaemon_ThrottledResourceDoesNotBlockOthers verifies that a single
+// heavily rate-limited resource (one that floods events) does not stall the
+// consumer loop and starve convergence of other resources. With the previous
+// blocking rate.Limiter.Wait, the loop would block ~10s on the throttled
+// resource and the important resource would not converge within the test
+// window.
+func TestDaemon_ThrottledResourceDoesNotBlockOthers(t *testing.T) {
+	const floodID = "file:/etc/flood"
+	const importantID = "file:/etc/important"
+
+	flood := &mockWatcherExt{
+		mockExt: *newMockExt(floodID, true),
+		watchFn: func(ctx context.Context, events chan<- extensions.Event) error {
+			ticker := time.NewTicker(time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-ticker.C:
+					select {
+					case events <- extensions.Event{ResourceID: floodID, Kind: extensions.EventWatch, Time: time.Now()}:
+					case <-ctx.Done():
+						return nil
+					}
+				}
+			}
+		},
+	}
+
+	important := &mockWatcherExt{
+		mockExt: *newMockExt(importantID, true),
+		watchFn: func(ctx context.Context, events chan<- extensions.Event) error {
+			select {
+			case <-time.After(150 * time.Millisecond):
+			case <-ctx.Done():
+				return nil
+			}
+			select {
+			case events <- extensions.Event{ResourceID: importantID, Kind: extensions.EventWatch, Time: time.Now()}:
+			case <-ctx.Done():
+				return nil
+			}
+			<-ctx.Done()
+			return nil
+		},
+	}
+
+	g := graph.New()
+	g.AddNode(flood)
+	g.AddNode(important)
+
+	d := New(g, &nullPrinter{}, Options{
+		Timeout:        5 * time.Second,
+		Parallel:       1,
+		CoalesceWindow: 10 * time.Millisecond,
+	})
+
+	// The important resource drifts just before its watcher fires.
+	go func() {
+		time.Sleep(140 * time.Millisecond)
+		important.inSync.Store(false)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	d.Run(ctx)
+
+	if important.applied.Load() < 1 {
+		t.Errorf("important resource Apply called %d times, want >= 1 (throttled resource blocked the loop)", important.applied.Load())
+	}
+}
+
 func TestDaemon_TimeoutExitsAfterStability(t *testing.T) {
 	ext := &mockWatcherExt{
 		mockExt: *newMockExt("file:/etc/test", true),
