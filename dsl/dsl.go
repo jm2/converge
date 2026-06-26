@@ -91,6 +91,9 @@ type ExecOpts struct {
 	Retries     int           // exec-specific: retries within a single Apply call
 	RetryDelay  time.Duration // delay between exec-specific retries
 	Critical    bool
+	Creates     string // idempotency guard: skip if this path exists
+	OnlyIf      string // idempotency guard: skip unless this command succeeds
+	Unless      string // idempotency guard: skip if this command succeeds
 	Noop        bool
 	Retry       int // engine-level: how many times the daemon retries after Check/Apply failure
 	Limit       float64
@@ -211,14 +214,14 @@ type RebootOpts struct {
 
 type TemplateOpts struct {
 	Source    string            // Go text/template source
-	Vars     map[string]string // template variables
-	Mode     os.FileMode
-	Owner    string
-	Group    string
-	Critical bool
-	Noop     bool
-	Retry    int
-	Limit    float64
+	Vars      map[string]string // template variables
+	Mode      os.FileMode
+	Owner     string
+	Group     string
+	Critical  bool
+	Noop      bool
+	Retry     int
+	Limit     float64
 	AutoEdge  *bool
 	AutoGroup *bool
 	Condition extensions.Condition
