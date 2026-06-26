@@ -4,7 +4,7 @@ Event-driven configuration management daemon. Single static binary, zero runtime
 
 ## Architecture
 
-Read `docs/design.md` for philosophy and security model, `docs/extensions.md` for adding resources, `docs/examples.md` for blueprint authoring, `docs/cli.md` for commands and exit codes.
+Read `docs/design.md` for philosophy and security model, `docs/extensions.md` for adding resources, `docs/examples.md` for blueprint authoring, `docs/cli.md` for commands and exit codes, `docs/hcl.md` for the HCL manifest front-end (`manifest/`).
 
 | Layer | Location |
 | --- | --- |

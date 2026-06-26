@@ -4,6 +4,8 @@ How to write, register, compose, and test Converge blueprints, plus a complete r
 
 For real-world blueprints, see the [blueprints/](../blueprints/) directory, including [CIS L1 benchmarks](../blueprints/cis/) for Windows, Ubuntu, and macOS.
 
+> Prefer declarative config files? The same resource types can be authored as **HCL manifests** instead of Go blueprints — see [HCL](hcl.md) and the runnable [examples/](../examples/).
+
 - [What Is a Blueprint](#what-is-a-blueprint)
 - [Writing a Blueprint](#writing-a-blueprint)
 - [Registering in main.go](#registering-in-maingo)
