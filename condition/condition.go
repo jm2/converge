@@ -33,8 +33,9 @@ func NetworkInterface(name string) *networkInterfaceCondition {
 }
 
 // MountPoint returns a Condition satisfied when path is a mount point
-// (on a different device than its parent directory). Wait uses inotify on
-// /proc/self/mountinfo on Linux, kqueue on macOS, and polling on Windows.
+// (on a different device than its parent directory). Wait uses poll(2) on
+// /proc/self/mountinfo on Linux (procfs delivers POLLPRI on mount-table
+// changes, not inotify events), kqueue on macOS, and polling on Windows.
 func MountPoint(path string) *mountPointCondition {
 	return &mountPointCondition{path: path}
 }
@@ -45,10 +46,11 @@ type networkReachableCondition struct {
 	port int
 }
 
-func (c *networkReachableCondition) Met(_ context.Context) (bool, error) {
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", c.host, c.port), 2*time.Second)
+func (c *networkReachableCondition) Met(ctx context.Context) (bool, error) {
+	d := net.Dialer{Timeout: 2 * time.Second}
+	conn, err := d.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", c.host, c.port))
 	if err != nil {
-		return false, nil //nolint:nilerr // unreachable is not an error, just not met
+		return false, nil //nolint:nilerr // unreachable/cancelled is not an error, just not met
 	}
 	conn.Close()
 	return true, nil
