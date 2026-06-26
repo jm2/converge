@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -791,6 +792,181 @@ func TestUpsertBlock(t *testing.T) {
 				t.Errorf("upsertBlock() =\n%q\nwant\n%q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestExtractBlock_DuplicateMarkers(t *testing.T) {
+	begin := "# BEGIN converge:test"
+	end := "# END converge:test"
+
+	tests := []struct {
+		name string
+		data string
+	}{
+		{
+			"nested begin marker",
+			fmt.Sprintf("%s\na\n%s\nb\n%s", begin, begin, end),
+		},
+		{
+			"two complete blocks",
+			fmt.Sprintf("%s\na\n%s\n%s\nb\n%s", begin, end, begin, end),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := extractBlock(tt.data, begin, end); err == nil {
+				t.Fatal("expected error for malformed/duplicate markers, got nil")
+			}
+		})
+	}
+}
+
+// TestFile_Block_RejectsMarkerInContent verifies that content containing a line
+// matching the block sentinel is rejected (it would otherwise corrupt the block
+// boundaries and grow the file unboundedly across applies).
+func TestFile_Block_RejectsMarkerInContent(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"contains end marker", "key=value\n# END converge:myapp\nevil=true"},
+		{"contains begin marker", "# BEGIN converge:myapp\nkey=value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mfs := testutil.NewMapFS()
+			f := New("/etc/config", Opts{
+				BlockName: "myapp",
+				Content:   tt.content,
+				FS:        mfs,
+			})
+
+			if _, err := f.Check(ctx); err == nil {
+				t.Error("Check() should reject content containing a block marker")
+			}
+			if _, err := f.Apply(ctx); err == nil {
+				t.Error("Apply() should reject content containing a block marker")
+			}
+			if mfs.Has("/etc/config") {
+				t.Error("file must not be written when content is rejected")
+			}
+		})
+	}
+}
+
+// TestFile_Block_RejectsMalformedExisting verifies that an existing file with
+// malformed markers is not blindly rewritten (which would grow it unboundedly).
+func TestFile_Block_RejectsMalformedExisting(t *testing.T) {
+	ctx := context.Background()
+	mfs := testutil.NewMapFS()
+	existing := "# BEGIN converge:myapp\na\n# BEGIN converge:myapp\nb\n# END converge:myapp\n"
+	mfs.Set("/etc/config", []byte(existing), 0644)
+
+	f := New("/etc/config", Opts{BlockName: "myapp", Content: "key=value", FS: mfs})
+	if _, err := f.Apply(ctx); err == nil {
+		t.Fatal("Apply() should error on malformed existing markers")
+	}
+
+	// The file must be left untouched (not grown) when markers are malformed.
+	data, _ := mfs.Get("/etc/config")
+	if string(data) != existing {
+		t.Errorf("file was modified despite malformed markers:\n%q", data)
+	}
+}
+
+// recordingFS wraps a MapFS and records the order of WriteFile/Chmod calls so
+// tests can assert mode-before-content ordering.
+type recordingFS struct {
+	*testutil.MapFS
+	ops []fsOp
+}
+
+type fsOp struct {
+	op   string // "write" or "chmod"
+	mode fs.FileMode
+}
+
+func (r *recordingFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
+	r.ops = append(r.ops, fsOp{op: "write", mode: perm})
+	return r.MapFS.WriteFile(name, data, perm)
+}
+
+func (r *recordingFS) Chmod(name string, mode fs.FileMode) error {
+	r.ops = append(r.ops, fsOp{op: "chmod", mode: mode})
+	return r.MapFS.Chmod(name, mode)
+}
+
+// TestFile_Apply_TightensModeBeforeWrite verifies that when tightening the mode
+// of an existing file, the chmod happens before the new content is written, so
+// the content is never briefly exposed under the looser permissions.
+func TestFile_Apply_TightensModeBeforeWrite(t *testing.T) {
+	ctx := context.Background()
+	rec := &recordingFS{MapFS: testutil.NewMapFS()}
+	// Pre-existing file with a loose, world-readable mode.
+	rec.Set("/etc/secret", []byte("old\n"), 0644)
+
+	f := New("/etc/secret", Opts{Content: "topsecret\n", Mode: 0600, FS: rec})
+	if _, err := f.Apply(ctx); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	writeIdx := -1
+	for i, op := range rec.ops {
+		if op.op == "write" {
+			writeIdx = i
+			break
+		}
+	}
+	if writeIdx < 0 {
+		t.Fatalf("no write recorded, ops = %+v", rec.ops)
+	}
+
+	tightenedBefore := false
+	for i := 0; i < writeIdx; i++ {
+		if rec.ops[i].op == "chmod" && rec.ops[i].mode == 0600 {
+			tightenedBefore = true
+		}
+	}
+	if !tightenedBefore {
+		t.Errorf("expected chmod to 0600 before write, ops = %+v", rec.ops)
+	}
+
+	// Final state must still be correct.
+	data, _ := rec.Get("/etc/secret")
+	if string(data) != "topsecret\n" {
+		t.Errorf("content = %q, want %q", data, "topsecret\n")
+	}
+	info, _ := rec.Stat("/etc/secret")
+	if info.Mode().Perm() != 0600 {
+		t.Errorf("mode = %04o, want 0600", info.Mode().Perm())
+	}
+}
+
+// TestFile_Apply_RefusesSymlink verifies that Apply refuses to write through a
+// pre-planted symlink on the real filesystem (Linux/Unix).
+func TestFile_Apply_RefusesSymlink(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.txt")
+	if err := os.WriteFile(target, []byte("untouched\n"), 0600); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+	link := filepath.Join(dir, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	f := New(link, Opts{Content: "attacker\n", Mode: 0644})
+	if _, err := f.Apply(ctx); err == nil {
+		t.Fatal("Apply() should refuse to write through a symlink")
+	}
+
+	// The symlink target must be untouched.
+	data, _ := os.ReadFile(target)
+	if string(data) != "untouched\n" {
+		t.Errorf("target content = %q, want %q", data, "untouched\n")
 	}
 }
 
