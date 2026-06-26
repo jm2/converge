@@ -44,10 +44,10 @@ type Daemon struct {
 	printer       output.Printer
 	opts          Options
 	retries       *retryManager
-	initErr       error         // error from initial convergence
-	processing    sync.Map      // tracks in-progress resource IDs
-	conditionsMet sync.Map      // resourceID -> bool; true once condition is satisfied
-	lastChange    atomic.Int64  // unix nano timestamp of last Apply that changed something
+	initErr       error        // error from initial convergence
+	processing    sync.Map     // tracks in-progress resource IDs
+	conditionsMet sync.Map     // resourceID -> bool; true once condition is satisfied
+	lastChange    atomic.Int64 // unix nano timestamp of last Apply that changed something
 }
 
 // New creates a daemon for the given resource graph.
@@ -99,7 +99,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		Parallel:        d.opts.Parallel,
 		SuppressSummary: d.opts.ConvergedTimeout == 0,
 	}
-	code, err := engine.RunApplyDAG(d.graph, d.printer, engineOpts)
+	code, err := engine.RunApplyDAG(ctx, d.graph, d.printer, engineOpts)
 	if err != nil {
 		deck.Errorf("initial convergence failed (exit %d): %v", code, err)
 		d.initErr = err

@@ -129,6 +129,30 @@ func applyOne(ctx context.Context, r extensions.Extension, timeout time.Duration
 	return applyResult{r, result}
 }
 
+// gateMet reports whether a resource's condition gate currently allows it to
+// run. A nil condition is always met. Errors are treated as not-met, so a
+// resource is skipped rather than applied against an unknown precondition.
+func gateMet(ctx context.Context, cond extensions.Condition, timeout time.Duration) bool {
+	if cond == nil {
+		return true
+	}
+	cctx, cancel := withTimeout(ctx, timeout)
+	defer cancel()
+	met, err := cond.Met(cctx)
+	return err == nil && met
+}
+
+// applyNode gates a resource on its condition, then applies it. A gated resource
+// whose condition is not yet met is reported as a skipped no-op (StatusOK), not
+// a failure, mirroring the documented "skip until met" semantics (the daemon
+// converges it later via its EventCondition path).
+func applyNode(ctx context.Context, r extensions.Extension, timeout time.Duration, noop bool, cond extensions.Condition) applyResult {
+	if !gateMet(ctx, cond, timeout) {
+		return applyResult{r, &extensions.Result{Status: extensions.StatusOK, Message: "skipped: condition not met"}}
+	}
+	return applyOne(ctx, r, timeout, noop)
+}
+
 type nameAware interface {
 	SetMaxNameLen(int)
 }
@@ -159,7 +183,7 @@ func RunPlanDAG(g *graph.Graph, printer output.Printer, opts Options) (int, erro
 // Dependencies in earlier layers complete before later layers start.
 // Package resources in the same layer with the same manager and state
 // are auto-grouped into a single batch install/remove invocation.
-func RunApplyDAG(g *graph.Graph, printer output.Printer, opts Options) (int, error) {
+func RunApplyDAG(ctx context.Context, g *graph.Graph, printer output.Printer, opts Options) (int, error) {
 	nodeLayers, err := g.TopologicalNodeLayers()
 	if err != nil {
 		return exit.Error, fmt.Errorf("building execution order: %w", err)
@@ -169,13 +193,19 @@ func RunApplyDAG(g *graph.Graph, printer output.Printer, opts Options) (int, err
 
 	// Build a noop lookup from node meta.
 	noopSet := make(map[string]bool)
+	// Build a condition-gate lookup. Gated resources are skipped until their
+	// precondition holds; applying them unconditionally during the initial pass
+	// would contradict the documented "skip until met" gate.
+	gated := make(map[string]extensions.Condition)
 	for _, node := range g.Nodes() {
 		if node.Meta.Noop {
 			noopSet[node.Ext.ID()] = true
 		}
+		if node.Meta.Condition != nil {
+			gated[node.Ext.ID()] = node.Meta.Condition
+		}
 	}
 
-	ctx := context.Background()
 	start := time.Now()
 	changed, ok, failed := 0, 0, 0
 	idx := 0
@@ -196,7 +226,7 @@ func RunApplyDAG(g *graph.Graph, printer output.Printer, opts Options) (int, err
 				go func(j int, res extensions.Extension) {
 					defer wg.Done()
 					defer func() { <-sem }()
-					results[j] = applyOne(ctx, res, opts.Timeout, noopSet[res.ID()])
+					results[j] = applyNode(ctx, res, opts.Timeout, noopSet[res.ID()], gated[res.ID()])
 				}(i, r)
 			}
 			wg.Wait()
@@ -210,7 +240,7 @@ func RunApplyDAG(g *graph.Graph, printer output.Printer, opts Options) (int, err
 			for i, r := range layer {
 				idx++
 				printer.ApplyStart(r, idx, len(all))
-				results[i] = applyOne(ctx, r, opts.Timeout, noopSet[r.ID()])
+				results[i] = applyNode(ctx, r, opts.Timeout, noopSet[r.ID()], gated[r.ID()])
 				printer.ApplyResult(r, results[i].result)
 			}
 		}

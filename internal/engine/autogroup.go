@@ -155,6 +155,12 @@ func autoGroupLayer(layer []*graph.Node) []extensions.Extension {
 			result = append(result, node.Ext)
 			continue
 		}
+		// Condition-gated packages must likewise stay standalone so the engine
+		// can gate them by ID; grouping would drop the gate.
+		if node.Meta.Condition != nil {
+			result = append(result, node.Ext)
+			continue
+		}
 		key := groupKey{manager: p.ManagerName, state: p.State}
 		if _, exists := groupOrder[key]; !exists {
 			groupOrder[key] = orderIdx

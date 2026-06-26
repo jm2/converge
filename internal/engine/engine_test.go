@@ -12,11 +12,12 @@ import (
 )
 
 type mockExtension struct {
-	id       string
-	name     string
-	inSync   bool
-	applyErr error
-	checkErr error
+	id          string
+	name        string
+	inSync      bool
+	applyErr    error
+	checkErr    error
+	applyCalled bool
 }
 
 func (m *mockExtension) ID() string     { return m.id }
@@ -30,11 +31,19 @@ func (m *mockExtension) Check(_ context.Context) (*extensions.State, error) {
 }
 
 func (m *mockExtension) Apply(_ context.Context) (*extensions.Result, error) {
+	m.applyCalled = true
 	if m.applyErr != nil {
 		return nil, m.applyErr
 	}
 	return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "applied"}, nil
 }
+
+// mockCondition is a fixed-result gate for testing condition handling.
+type mockCondition struct{ met bool }
+
+func (c mockCondition) Met(_ context.Context) (bool, error) { return c.met, nil }
+func (c mockCondition) Wait(_ context.Context) error        { return nil }
+func (c mockCondition) String() string                      { return "mock" }
 
 type criticalMock struct {
 	mockExtension
@@ -130,7 +139,7 @@ func TestRunApplyDAG(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			g := makeGraph(tt.exts...)
-			code, err := RunApplyDAG(g, &discardPrinter{}, DefaultOptions())
+			code, err := RunApplyDAG(context.Background(), g, &discardPrinter{}, DefaultOptions())
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -138,6 +147,49 @@ func TestRunApplyDAG(t *testing.T) {
 				t.Errorf("exit code = %d, want %d", code, tt.wantCode)
 			}
 		})
+	}
+}
+
+// TestRunApplyDAG_ConditionGate verifies the engine honors Meta.Condition during
+// apply: a drifted resource whose gate is unmet is skipped (not applied), while
+// one whose gate is met is applied.
+func TestRunApplyDAG_ConditionGate(t *testing.T) {
+	t.Parallel()
+
+	// Unmet gate: the drifted resource must be skipped, not applied.
+	unmet := &mockExtension{id: "file:/gated", name: "File /gated", inSync: false}
+	g := graph.New()
+	if err := g.AddNode(unmet); err != nil {
+		t.Fatal(err)
+	}
+	g.SetMeta(unmet.ID(), graph.NodeMeta{Condition: mockCondition{met: false}})
+	code, err := RunApplyDAG(context.Background(), g, &discardPrinter{}, DefaultOptions())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if unmet.applyCalled {
+		t.Error("resource with an unmet condition gate must not be applied")
+	}
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0 (gated resource skipped, nothing changed)", code)
+	}
+
+	// Met gate: the drifted resource is applied.
+	met := &mockExtension{id: "file:/active", name: "File /active", inSync: false}
+	g2 := graph.New()
+	if err := g2.AddNode(met); err != nil {
+		t.Fatal(err)
+	}
+	g2.SetMeta(met.ID(), graph.NodeMeta{Condition: mockCondition{met: true}})
+	code, err = RunApplyDAG(context.Background(), g2, &discardPrinter{}, DefaultOptions())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !met.applyCalled {
+		t.Error("resource with a met condition gate must be applied")
+	}
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2 (changed)", code)
 	}
 }
 
@@ -152,7 +204,7 @@ func TestRunApplyDAG_Parallel(t *testing.T) {
 		&mockExtension{id: "file:/b", name: "File /b", inSync: true},
 		&mockExtension{id: "pkg:git", name: "Package git", inSync: false},
 	)
-	code, err := RunApplyDAG(g, &discardPrinter{}, opts)
+	code, err := RunApplyDAG(context.Background(), g, &discardPrinter{}, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -171,7 +223,7 @@ func TestRunApplyDAG_CriticalFailure(t *testing.T) {
 		},
 		&mockExtension{id: "file:/b", name: "File /b", inSync: false},
 	)
-	code, err := RunApplyDAG(g, &discardPrinter{}, DefaultOptions())
+	code, err := RunApplyDAG(context.Background(), g, &discardPrinter{}, DefaultOptions())
 	if code != 3 {
 		t.Errorf("exit code = %d, want 3", code)
 	}
@@ -190,7 +242,7 @@ func TestRunApplyDAG_WithDependencies(t *testing.T) {
 	g.AddNode(svc)
 	g.AddEdge("service:nginx", "package:nginx")
 
-	code, err := RunApplyDAG(g, &discardPrinter{}, DefaultOptions())
+	code, err := RunApplyDAG(context.Background(), g, &discardPrinter{}, DefaultOptions())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
