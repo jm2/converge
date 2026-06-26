@@ -124,6 +124,14 @@ func (t *Template) Check(_ context.Context) (*extensions.State, error) {
 		})
 	}
 
+	ownerChange, err := extensions.OwnershipChange(t.fsys(), absPath, t.Owner, t.Group)
+	if err != nil {
+		return nil, fmt.Errorf("check ownership %s: %w", absPath, err)
+	}
+	if ownerChange != nil {
+		changes = append(changes, *ownerChange)
+	}
+
 	return &extensions.State{InSync: len(changes) == 0, Changes: changes}, nil
 }
 
@@ -151,6 +159,10 @@ func (t *Template) Apply(_ context.Context) (*extensions.Result, error) {
 		if err := t.fsys().Chmod(t.Path, t.Mode); err != nil {
 			return nil, fmt.Errorf("chmod %s: %w", t.Path, err)
 		}
+	}
+
+	if err := extensions.ApplyOwnership(t.fsys(), t.Path, t.Owner, t.Group); err != nil {
+		return nil, fmt.Errorf("chown %s: %w", t.Path, err)
 	}
 
 	return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "rendered"}, nil

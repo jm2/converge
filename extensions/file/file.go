@@ -244,6 +244,14 @@ func (f *File) checkFull() (*extensions.State, error) {
 		})
 	}
 
+	ownerChange, err := extensions.OwnershipChange(f.fsys(), absPath, f.Owner, f.Group)
+	if err != nil {
+		return nil, fmt.Errorf("check ownership %s: %w", absPath, err)
+	}
+	if ownerChange != nil {
+		changes = append(changes, *ownerChange)
+	}
+
 	return &extensions.State{InSync: len(changes) == 0, Changes: changes}, nil
 }
 
@@ -295,6 +303,10 @@ func (f *File) applyFull() (*extensions.Result, error) {
 		if err := f.fsys().Chmod(absPath, f.Mode); err != nil {
 			return nil, fmt.Errorf("chmod %s: %w", absPath, err)
 		}
+	}
+
+	if err := extensions.ApplyOwnership(f.fsys(), absPath, f.Owner, f.Group); err != nil {
+		return nil, fmt.Errorf("chown %s: %w", absPath, err)
 	}
 
 	return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "Updated"}, nil
