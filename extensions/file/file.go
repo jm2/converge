@@ -120,6 +120,29 @@ func (f *File) IsCritical() bool { return f.Critical }
 
 func (f *File) fsys() extensions.FS { return extensions.RealFS(f.FS) }
 
+// refuseSymlink rejects operating on a final path component that is a symlink,
+// preventing a pre-planted symlink from redirecting a privileged write or chmod
+// to an unintended target. It applies only to the real OS filesystem: the
+// extensions.FS abstraction's Stat follows symlinks, so an os.Lstat-based check
+// is used directly here. When a filesystem is injected (e.g. the in-memory MapFS
+// used in tests) there is no symlink concept and the check is skipped.
+func (f *File) refuseSymlink(absPath string) error {
+	if f.FS != nil {
+		return nil
+	}
+	info, err := os.Lstat(absPath)
+	if err != nil {
+		if isNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("lstat %s: %w", absPath, err)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to write through symlink %s", absPath)
+	}
+	return nil
+}
+
 // isNotExist checks for file-not-found using errors.Is(fs.ErrNotExist),
 // which works with both real OS errors and mock FS implementations.
 func isNotExist(err error) bool {
@@ -273,6 +296,10 @@ func (f *File) applyFull() (*extensions.Result, error) {
 		return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "removed"}, nil
 	}
 
+	if err := f.refuseSymlink(absPath); err != nil {
+		return nil, err
+	}
+
 	dir := filepath.Dir(absPath)
 	if err := f.fsys().MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
@@ -293,6 +320,16 @@ func (f *File) applyFull() (*extensions.Result, error) {
 		perm := f.Mode
 		if perm == 0 {
 			perm = 0644
+		}
+		// Tighten the mode of an existing file before writing so new (possibly
+		// secret) content is never briefly exposed under looser permissions. New
+		// files are created directly with perm by WriteFile, so no window exists.
+		if f.Mode != 0 {
+			if _, statErr := f.fsys().Stat(absPath); statErr == nil {
+				if err := f.fsys().Chmod(absPath, f.Mode); err != nil {
+					return nil, fmt.Errorf("chmod %s: %w", absPath, err)
+				}
+			}
 		}
 		if err := f.fsys().WriteFile(absPath, []byte(content), perm); err != nil {
 			return nil, fmt.Errorf("write %s: %w", absPath, err)
@@ -367,6 +404,10 @@ func (f *File) applyRemote(ctx context.Context) (*extensions.Result, error) {
 		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
 	}
 
+	if err := f.refuseSymlink(absPath); err != nil {
+		return nil, err
+	}
+
 	dir := filepath.Dir(absPath)
 	if err := f.fsys().MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
@@ -385,6 +426,15 @@ func (f *File) applyRemote(ctx context.Context) (*extensions.Result, error) {
 	perm := f.Mode
 	if perm == 0 {
 		perm = 0644
+	}
+	// Tighten the mode of an existing file before writing so the downloaded
+	// payload is never briefly exposed under looser permissions.
+	if f.Mode != 0 {
+		if _, statErr := f.fsys().Stat(absPath); statErr == nil {
+			if err := f.fsys().Chmod(absPath, f.Mode); err != nil {
+				return nil, fmt.Errorf("chmod %s: %w", absPath, err)
+			}
+		}
 	}
 	if err := f.fsys().WriteFile(absPath, data, perm); err != nil {
 		return nil, fmt.Errorf("write %s: %w", absPath, err)
@@ -447,7 +497,27 @@ func (f *File) endMarker() string {
 	return fmt.Sprintf("%s END converge:%s", f.BlockComment, f.BlockName)
 }
 
+// validateBlockContent ensures the managed block content does not itself contain
+// a line matching the block's begin or end marker. Such a line would corrupt the
+// block boundaries on the next read, causing perpetual drift and unbounded file
+// growth across repeated applies.
+func (f *File) validateBlockContent() error {
+	begin, end := f.beginMarker(), f.endMarker()
+	for _, line := range strings.Split(f.Content, "\n") {
+		if line == begin || line == end {
+			return fmt.Errorf("block %s[%s]: content contains a reserved marker line %q", f.Path, f.BlockName, line)
+		}
+	}
+	return nil
+}
+
 func (f *File) checkBlock() (*extensions.State, error) {
+	if f.State != "absent" {
+		if err := f.validateBlockContent(); err != nil {
+			return nil, err
+		}
+	}
+
 	absPath, err := filepath.Abs(f.Path)
 	if err != nil {
 		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
@@ -497,9 +567,19 @@ func (f *File) checkBlock() (*extensions.State, error) {
 }
 
 func (f *File) applyBlock() (*extensions.Result, error) {
+	if f.State != "absent" {
+		if err := f.validateBlockContent(); err != nil {
+			return nil, err
+		}
+	}
+
 	absPath, err := filepath.Abs(f.Path)
 	if err != nil {
 		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
+	}
+
+	if err := f.refuseSymlink(absPath); err != nil {
+		return nil, err
 	}
 
 	data, err := f.fsys().ReadFile(absPath)
@@ -510,6 +590,14 @@ func (f *File) applyBlock() (*extensions.Result, error) {
 		data = nil
 	} else if err != nil {
 		return nil, fmt.Errorf("read %s: %w", absPath, err)
+	}
+
+	// Refuse to rewrite a file whose existing markers are malformed (missing end
+	// or duplicated); blindly upserting would corrupt and grow the file.
+	if data != nil {
+		if _, err := extractBlock(string(data), f.beginMarker(), f.endMarker()); err != nil {
+			return nil, fmt.Errorf("block %s[%s]: %w", absPath, f.BlockName, err)
+		}
 	}
 
 	var result string
@@ -543,12 +631,18 @@ func (f *File) applyBlock() (*extensions.Result, error) {
 // Returns an error if the begin marker is found but the end marker is missing.
 func extractBlock(data, beginMarker, endMarker string) (string, error) {
 	lines := strings.Split(data, "\n")
-	var inside bool
+	var inside, seen bool
 	var block []string
 
 	for _, line := range lines {
 		if line == beginMarker {
+			// A second begin marker (nested or after a completed block) means the
+			// markers are malformed; refuse rather than silently merging blocks.
+			if inside || seen {
+				return "", fmt.Errorf("duplicate begin marker")
+			}
 			inside = true
+			seen = true
 			continue
 		}
 		if line == endMarker {
