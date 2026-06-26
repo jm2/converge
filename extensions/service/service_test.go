@@ -82,13 +82,26 @@ func TestService_Check_Launchd(t *testing.T) {
 		t.Skip("launchd tests only run on macOS")
 	}
 	ctx := context.Background()
-	s := New("test", Opts{State: "running", Enable: true, InitSystem: "launchd"})
+	// A service that does not exist must not falsely report compliant: a job
+	// that is not loaded cannot satisfy State=running/Enable=true.
+	s := New("com.converge.definitely-not-real-12345", Opts{State: "running", Enable: true, InitSystem: "launchd"})
 	state, err := s.Check(ctx)
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)
 	}
-	if !state.InSync {
-		t.Error("launchd stub should always return InSync=true")
+	if state.InSync {
+		t.Error("nonexistent service wanted running+enabled should report drift, not InSync")
+	}
+}
+
+func TestService_Check_Launchd_UnsupportedInit(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("launchd tests only run on macOS")
+	}
+	ctx := context.Background()
+	s := New("test", Opts{State: "running", InitSystem: "runit"})
+	if _, err := s.Check(ctx); err == nil {
+		t.Error("Check() should fail for unsupported init system on darwin")
 	}
 }
 
