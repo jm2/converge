@@ -141,7 +141,10 @@ func (f *Firewall) removeRule() (*extensions.Result, error) {
 	return resultChanged("removed")
 }
 
-// ruleMatches checks if an existing rule has the expected properties.
+// ruleMatches checks if an existing rule has the expected properties. It
+// compares every attribute converge sets (protocol, direction, action, enabled,
+// port, source, dest) so a rule flipped block->allow or re-pointed to another
+// port/source is detected as drift rather than reported in-sync by name alone.
 func (f *Firewall) ruleMatches(r *ole.IDispatch) bool {
 	proto, _ := oleutil.GetProperty(r, "Protocol")
 	dir, _ := oleutil.GetProperty(r, "Direction")
@@ -164,6 +167,21 @@ func (f *Firewall) ruleMatches(r *ole.IDispatch) bool {
 	if f.Port > 0 {
 		portStr := fmt.Sprintf("%d", f.Port)
 		if ports.ToString() != portStr {
+			return false
+		}
+	}
+	// Source maps to RemoteAddresses, Dest to LocalAddresses (see addRule).
+	// Windows may echo addresses back with a dotted mask, so compare with
+	// notation-tolerant equality to avoid spurious drift.
+	if f.Source != "" {
+		remote, _ := oleutil.GetProperty(r, "RemoteAddresses")
+		if !addrEqual(remote.ToString(), f.Source) {
+			return false
+		}
+	}
+	if f.Dest != "" {
+		local, _ := oleutil.GetProperty(r, "LocalAddresses")
+		if !addrEqual(local.ToString(), f.Dest) {
 			return false
 		}
 	}
