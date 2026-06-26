@@ -94,10 +94,37 @@ func sentinelDir() string {
 // /proc/uptime, kern.boottime) have at best millisecond precision, so
 // nanosecond sentinels would create false-negative comparisons.
 func writeSentinel(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create sentinel dir %s: %w", filepath.Dir(path), err)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create sentinel dir %s: %w", dir, err)
 	}
-	return os.WriteFile(path, []byte(strconv.FormatInt(time.Now().Unix(), 10)), 0o644)
+	// The sentinel is the reboot resource's idempotency guard: it MUST survive
+	// the imminent reboot, so fsync both the file's data and the parent
+	// directory entry before returning. Without this, an immediate reboot(2)
+	// (which does not sync filesystems) can lose the still-dirty page and the
+	// resource re-reboots on next boot — a boot loop.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("create sentinel %s: %w", path, err)
+	}
+	if _, err := f.WriteString(strconv.FormatInt(time.Now().Unix(), 10)); err != nil {
+		f.Close()
+		return fmt.Errorf("write sentinel %s: %w", path, err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("fsync sentinel %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close sentinel %s: %w", path, err)
+	}
+	// fsync the directory so the new dirent is durable too (best-effort: not all
+	// platforms permit opening a directory for sync).
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
 
 // sentinelTime reads the timestamp written by writeSentinel. Supports both

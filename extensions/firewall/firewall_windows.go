@@ -28,6 +28,9 @@ var protocolMap = map[string]int32{"tcp": netFwIPProtocolTCP, "udp": netFwIPProt
 
 // Check determines whether a matching firewall rule exists with correct properties.
 func (f *Firewall) Check(_ context.Context) (*extensions.State, error) {
+	if err := f.validErr(); err != nil {
+		return nil, err
+	}
 	exists, match, err := f.withCOM(func(rules *ole.IDispatch) (bool, bool, error) {
 		rule, err := oleutil.CallMethod(rules, "Item", f.Name)
 		if err != nil {
@@ -68,6 +71,9 @@ func (f *Firewall) Check(_ context.Context) (*extensions.State, error) {
 
 // Apply creates or removes the firewall rule via the Windows Firewall COM API.
 func (f *Firewall) Apply(_ context.Context) (*extensions.Result, error) {
+	if err := f.validErr(); err != nil {
+		return nil, err
+	}
 	if f.State == "absent" {
 		return f.removeRule()
 	}

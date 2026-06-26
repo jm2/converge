@@ -1,6 +1,7 @@
 package firewall
 
 import (
+	"context"
 	"testing"
 
 	"github.com/TsekNet/converge/extensions"
@@ -144,7 +145,10 @@ func TestFirewall_Validate(t *testing.T) {
 	}
 }
 
-func TestFirewall_New_PanicsOnInvalid(t *testing.T) {
+// TestFirewall_New_DefersInvalidToCheck verifies invalid input does NOT panic
+// (which would crash the whole run); it is reported as an error from Check/Apply
+// so the engine can accumulate it like any other resource failure.
+func TestFirewall_New_DefersInvalidToCheck(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -163,11 +167,17 @@ func TestFirewall_New_PanicsOnInvalid(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			defer func() {
-				if r := recover(); r == nil {
-					t.Error("New() should panic on invalid input")
+				if r := recover(); r != nil {
+					t.Fatalf("New() must not panic on invalid input, got panic: %v", r)
 				}
 			}()
-			New(tt.fwName, Opts{Port: tt.port, Protocol: tt.protocol, Direction: tt.direction, Action: tt.action})
+			f := New(tt.fwName, Opts{Port: tt.port, Protocol: tt.protocol, Direction: tt.direction, Action: tt.action})
+			if _, err := f.Check(context.Background()); err == nil {
+				t.Error("Check() must return an error for an invalid firewall rule")
+			}
+			if _, err := f.Apply(context.Background()); err == nil {
+				t.Error("Apply() must return an error for an invalid firewall rule")
+			}
 		})
 	}
 }

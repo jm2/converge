@@ -34,6 +34,12 @@ type Firewall struct {
 	Dest      string // Optional destination IP or CIDR. Empty = any.
 	State     string // "present" (default) or "absent".
 	Critical  bool
+
+	// valErr holds a validation failure detected at construction. It is
+	// surfaced as an error from Check/Apply rather than a panic, so one
+	// malformed rule cannot crash the whole run (the engine accumulates and
+	// reports it like any other resource failure).
+	valErr error
 }
 
 // validName must never allow '|' or '=' to prevent Windows firewall rule injection.
@@ -60,11 +66,17 @@ func New(name string, opts Opts) *Firewall {
 		State:     state,
 		Critical:  opts.Critical,
 	}
-	if err := f.Validate(); err != nil {
-		panic(fmt.Sprintf("converge: invalid Firewall: %v", err))
-	}
+	// Validation failures are recorded, not panicked: invalid input must be
+	// reported through the normal Check/Apply error path so it cannot abort an
+	// entire converge run (this mirrors the DSL's accumulate-errors contract).
+	f.valErr = f.Validate()
 	return f
 }
+
+// validErr returns the construction-time validation error, if any. Platform
+// Check/Apply implementations must call this first so a malformed rule fails
+// cleanly instead of attempting (and mis-reporting) enforcement.
+func (f *Firewall) validErr() error { return f.valErr }
 
 // Validate checks all fields for correctness and rejects values that
 // could cause rule injection or produce silently broken rules.

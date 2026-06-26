@@ -45,6 +45,9 @@ func (r *Reboot) Apply(ctx context.Context) (*extensions.Result, error) {
 	if err := writeSentinel(r.sentinelPath()); err != nil {
 		return nil, fmt.Errorf("write sentinel for %s: %w", r.ID(), err)
 	}
+	// reboot(2) does not sync filesystems; flush all buffers so the sentinel
+	// (and any other pending writes) are durable before the kernel restarts.
+	unix.Sync()
 	if err := unix.Reboot(unix.LINUX_REBOOT_CMD_RESTART); err != nil {
 		return nil, fmt.Errorf("reboot: %w", err)
 	}

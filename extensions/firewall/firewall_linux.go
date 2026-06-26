@@ -24,6 +24,9 @@ const (
 
 // Check determines whether a matching nftables rule exists.
 func (f *Firewall) Check(_ context.Context) (*extensions.State, error) {
+	if err := f.validErr(); err != nil {
+		return nil, err
+	}
 	exists, err := f.ruleExists()
 	if err != nil {
 		return nil, fmt.Errorf("check firewall rule %q: %w", f.Name, err)
@@ -33,6 +36,9 @@ func (f *Firewall) Check(_ context.Context) (*extensions.State, error) {
 
 // Apply creates or removes the nftables rule.
 func (f *Firewall) Apply(_ context.Context) (*extensions.Result, error) {
+	if err := f.validErr(); err != nil {
+		return nil, err
+	}
 	if f.State == "absent" {
 		return f.removeRule()
 	}

@@ -327,6 +327,20 @@ func TestAutoGroupLayer(t *testing.T) {
 			wantGroups: 0,
 		},
 		{
+			// A noop package must not be folded into a group; if it were, its
+			// ID would change and the engine's noop skip would be lost.
+			name: "noop package excluded from grouping",
+			layer: []*graph.Node{
+				{
+					Ext:  &extpkg.Package{PkgName: "curl", State: "present", Manager: mgr1, ManagerName: "apt"},
+					Meta: graph.NodeMeta{Noop: true},
+				},
+				pkgNode("git", "present", "apt", mgr1),
+			},
+			wantCount:  2, // noop curl ungrouped + git alone (no group)
+			wantGroups: 0,
+		},
+		{
 			name:       "empty layer",
 			layer:      []*graph.Node{},
 			wantCount:  0,
@@ -354,4 +368,43 @@ func TestAutoGroupLayer(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAutoGroupLayer_NoopKeepsID is the regression guard for the noop-drop bug:
+// a noop package grouped with a same-manager/state sibling must remain a
+// standalone *Package whose ID is unchanged, so RunApplyDAG's noopSet (keyed by
+// ID) still skips its Apply.
+func TestAutoGroupLayer_NoopKeepsID(t *testing.T) {
+	t.Parallel()
+	mgr := &testManager{name: "apt", installed: map[string]bool{}}
+	layer := []*graph.Node{
+		{
+			Ext:  &extpkg.Package{PkgName: "curl", State: "present", Manager: mgr, ManagerName: "apt"},
+			Meta: graph.NodeMeta{Noop: true},
+		},
+		pkgNode("git", "present", "apt", mgr),
+		pkgNode("vim", "present", "apt", mgr),
+	}
+	result := autoGroupLayer(layer)
+
+	var foundNoop bool
+	for _, ext := range result {
+		if _, isGroup := ext.(*PackageGroup); isGroup {
+			continue
+		}
+		if ext.ID() == "package:curl" {
+			foundNoop = true
+		}
+	}
+	if !foundNoop {
+		t.Fatalf("noop package curl was folded into a group; its ID must remain \"package:curl\". result: %v", ids(result))
+	}
+}
+
+func ids(exts []extensions.Extension) []string {
+	out := make([]string, len(exts))
+	for i, e := range exts {
+		out[i] = e.ID()
+	}
+	return out
 }

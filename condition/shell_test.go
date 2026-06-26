@@ -3,7 +3,28 @@ package condition
 import (
 	"context"
 	"testing"
+	"time"
 )
+
+// TestShell_Met_Timeout verifies a blocking command cannot hang Met()
+// indefinitely: shellTimeout bounds it so the daemon (which evaluates conditions
+// synchronously at startup) cannot be wedged by one slow command.
+func TestShell_Met_Timeout(t *testing.T) {
+	orig := shellTimeout
+	shellTimeout = 200 * time.Millisecond
+	defer func() { shellTimeout = orig }()
+
+	start := time.Now()
+	met, _ := Shell("sleep 5").Met(context.Background())
+	elapsed := time.Since(start)
+
+	if met {
+		t.Error("Met() should be false when the command is killed by the timeout")
+	}
+	if elapsed > 3*time.Second {
+		t.Errorf("Met() took %v; shellTimeout should have bounded it to ~200ms", elapsed)
+	}
+}
 
 func TestShell_Met_ExitCode(t *testing.T) {
 	ctx := context.Background()

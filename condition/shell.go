@@ -25,6 +25,12 @@ func Shell(command string) *shellCondition {
 	}
 }
 
+// shellTimeout bounds a single Met() evaluation so a slow or blocking command
+// cannot stall the caller indefinitely. The daemon evaluates conditions
+// synchronously while starting watchers, so an unbounded command would hang the
+// whole daemon. It is a package var so tests can shorten it.
+var shellTimeout = 30 * time.Second
+
 type shellCondition struct {
 	shellName      string
 	command        string
@@ -46,6 +52,8 @@ func (c *shellCondition) Match(expected string) *shellCondition {
 }
 
 func (c *shellCondition) Met(ctx context.Context) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, shellTimeout)
+	defer cancel()
 	stdout, err := shell.Run(ctx, c.shellName, c.command, nil)
 
 	if c.expectedOutput != "" {

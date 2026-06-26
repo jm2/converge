@@ -147,6 +147,14 @@ func autoGroupLayer(layer []*graph.Node) []extensions.Extension {
 			result = append(result, node.Ext)
 			continue
 		}
+		// noop packages must keep their original ID ("package:NAME") so the
+		// engine's noopSet (keyed by ID) skips their Apply. Grouping would
+		// rewrite the ID to "packages:..." and the noop flag would be lost,
+		// silently installing/removing a package marked for dry-run.
+		if node.Meta.Noop {
+			result = append(result, node.Ext)
+			continue
+		}
 		key := groupKey{manager: p.ManagerName, state: p.State}
 		if _, exists := groupOrder[key]; !exists {
 			groupOrder[key] = orderIdx
