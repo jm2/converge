@@ -247,6 +247,38 @@ func TestValidateAddr(t *testing.T) {
 	}
 }
 
+func TestAddrEqual(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		a    string
+		b    string
+		want bool
+	}{
+		{"identical bare IP", "10.0.0.1", "10.0.0.1", true},
+		{"bare IP equals /32", "10.0.0.1", "10.0.0.1/32", true},
+		{"bare IP equals dotted /32 mask", "10.0.0.1", "10.0.0.1/255.255.255.255", true},
+		{"prefixlen equals dotted mask", "10.0.0.0/24", "10.0.0.0/255.255.255.0", true},
+		{"different IP", "10.0.0.1", "10.0.0.2", false},
+		{"different prefix", "10.0.0.0/8", "10.0.0.0/16", false},
+		{"both empty", "", "", true},
+		{"empty vs set", "", "10.0.0.1", false},
+		{"whitespace tolerated", " 10.0.0.1 ", "10.0.0.1", true},
+		{"non-ip falls back to exact", "LocalSubnet", "LocalSubnet", true},
+		{"non-ip mismatch", "LocalSubnet", "*", false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := addrEqual(tt.a, tt.b); got != tt.want {
+				t.Errorf("addrEqual(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCheckResult(t *testing.T) {
 	t.Parallel()
 
