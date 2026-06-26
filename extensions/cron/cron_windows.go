@@ -6,17 +6,28 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/capnspacehook/taskmaster"
 
 	"github.com/TsekNet/converge/extensions"
 )
 
-// Check queries the Windows Task Scheduler for the named task and compares
-// its configured action against the desired command.
+// Check queries the Windows Task Scheduler for the named task and compares its
+// configured action, schedule (trigger), run-as user, and privilege level
+// against the desired state.
 func (c *Cron) Check(_ context.Context) (*extensions.State, error) {
 	if err := c.validate(); err != nil {
 		return nil, err
+	}
+
+	wantSchedule := ""
+	if c.State != "absent" {
+		ps, err := parseCronSchedule(c.Schedule)
+		if err != nil {
+			return nil, fmt.Errorf("cron %s: %w", c.Name, err)
+		}
+		wantSchedule = ps.signature()
 	}
 
 	info, err := getTaskInfo(c.Name)
@@ -24,7 +35,7 @@ func (c *Cron) Check(_ context.Context) (*extensions.State, error) {
 		return nil, fmt.Errorf("query task %s: %w", c.Name, err)
 	}
 
-	return c.checkState(info), nil
+	return c.checkState(info, wantSchedule), nil
 }
 
 // Apply creates or removes a Windows scheduled task via the Task Scheduler API.
@@ -40,7 +51,7 @@ func (c *Cron) Apply(_ context.Context) (*extensions.Result, error) {
 		return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "removed"}, nil
 	}
 
-	if err := createTask(c.Name, c.Command, c.User); err != nil {
+	if err := createTask(c.Name, c.Schedule, c.Command, c.User); err != nil {
 		return nil, err
 	}
 	return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "created"}, nil
@@ -48,13 +59,19 @@ func (c *Cron) Apply(_ context.Context) (*extensions.Result, error) {
 
 // taskInfo holds the properties of an existing scheduled task.
 type taskInfo struct {
-	exists  bool
-	command string
+	exists          bool
+	command         string
+	args            string
+	user            string
+	runLevelHighest bool
+	schedule        string // canonical trigger signature, "" if absent/unrepresentable
 }
 
 // checkState compares the desired state against the queried task info.
-// Extracted for testability (taskmaster requires Windows).
-func (c *Cron) checkState(info taskInfo) *extensions.State {
+// wantSchedule is the canonical signature of the desired schedule (empty when
+// the desired state is "absent"). Extracted for testability (taskmaster
+// requires Windows).
+func (c *Cron) checkState(info taskInfo, wantSchedule string) *extensions.State {
 	if c.State == "absent" {
 		if !info.exists {
 			return &extensions.State{InSync: true}
@@ -85,11 +102,48 @@ func (c *Cron) checkState(info taskInfo) *extensions.State {
 			Action:   "modify",
 		})
 	}
+	if info.schedule != wantSchedule {
+		changes = append(changes, extensions.Change{
+			Property: "schedule",
+			From:     info.schedule,
+			To:       wantSchedule,
+			Action:   "modify",
+		})
+	}
+	wantUser := c.User
+	if wantUser == "" {
+		wantUser = "SYSTEM"
+	}
+	if normalizeUser(info.user) != normalizeUser(wantUser) {
+		changes = append(changes, extensions.Change{
+			Property: "user",
+			From:     info.user,
+			To:       wantUser,
+			Action:   "modify",
+		})
+	}
+	if !info.runLevelHighest {
+		changes = append(changes, extensions.Change{
+			Property: "runlevel",
+			From:     "limited",
+			To:       "highest",
+			Action:   "modify",
+		})
+	}
+	if info.args != "" {
+		changes = append(changes, extensions.Change{
+			Property: "args",
+			From:     info.args,
+			To:       "",
+			Action:   "modify",
+		})
+	}
 
 	return &extensions.State{InSync: len(changes) == 0, Changes: changes}
 }
 
-// getTaskInfo retrieves the task's existence and configured command.
+// getTaskInfo retrieves the task's existence, configured command, run-as
+// principal, and schedule.
 func getTaskInfo(name string) (taskInfo, error) {
 	svc, err := taskmaster.Connect()
 	if err != nil {
@@ -103,19 +157,43 @@ func getTaskInfo(name string) (taskInfo, error) {
 	}
 	defer task.Release()
 
-	var command string
+	info := taskInfo{exists: true}
+
 	for _, action := range task.Definition.Actions {
 		if ea, ok := action.(taskmaster.ExecAction); ok {
-			command = ea.Path
+			info.command = ea.Path
+			info.args = ea.Args
 			break
 		}
 	}
 
-	return taskInfo{exists: true, command: command}, nil
+	info.user = task.Definition.Principal.UserID
+	info.runLevelHighest = task.Definition.Principal.RunLevel == taskmaster.TASK_RUNLEVEL_HIGHEST
+
+	for _, trig := range task.Definition.Triggers {
+		if sig := triggerSignature(trig); sig != "" {
+			info.schedule = sig
+			break
+		}
+	}
+
+	return info, nil
 }
 
-// createTask registers a new task using the taskmaster API.
-func createTask(name, command, user string) error {
+// createTask registers a new task using the taskmaster API. The schedule is
+// translated into a Task Scheduler trigger before any mutation occurs; an
+// unrepresentable schedule returns an error rather than registering a
+// triggerless (never-firing) task.
+func createTask(name, schedule, command, user string) error {
+	ps, err := parseCronSchedule(schedule)
+	if err != nil {
+		return fmt.Errorf("cron %s: %w", name, err)
+	}
+	trigger, err := buildTrigger(ps)
+	if err != nil {
+		return fmt.Errorf("cron %s: %w", name, err)
+	}
+
 	svc, err := taskmaster.Connect()
 	if err != nil {
 		return fmt.Errorf("taskmaster.Connect: %w", err)
@@ -139,6 +217,7 @@ func createTask(name, command, user string) error {
 		ID:   name,
 		Path: command,
 	})
+	def.AddTrigger(trigger)
 	def.RegistrationInfo.Description = "Managed by Converge: " + name
 	def.Principal.RunLevel = taskmaster.TASK_RUNLEVEL_HIGHEST
 	if user == "" {
@@ -155,6 +234,125 @@ func createTask(name, command, user string) error {
 	}
 	task.Release()
 	return nil
+}
+
+// buildTrigger constructs the Task Scheduler trigger for a parsed cron schedule.
+func buildTrigger(ps parsedSchedule) (taskmaster.Trigger, error) {
+	// StartBoundary needs a concrete date; use a fixed past date so the trigger
+	// is active immediately. Only the time-of-day is significant for recurrence.
+	start := time.Date(2000, 1, 1, ps.hour, ps.minute, 0, 0, time.Local)
+	base := taskmaster.TaskTrigger{Enabled: true, StartBoundary: start}
+
+	switch ps.kind {
+	case scheduleDaily:
+		return taskmaster.DailyTrigger{
+			TaskTrigger: base,
+			DayInterval: taskmaster.EveryDay,
+		}, nil
+	case scheduleWeekly:
+		return taskmaster.WeeklyTrigger{
+			TaskTrigger:  base,
+			DaysOfWeek:   weekdaysToMask(ps.daysOfWeek),
+			WeekInterval: taskmaster.EveryWeek,
+		}, nil
+	case scheduleMonthly:
+		return taskmaster.MonthlyTrigger{
+			TaskTrigger:  base,
+			DaysOfMonth:  daysOfMonthToMask(ps.daysOfMonth),
+			MonthsOfYear: monthsToMask(ps.months),
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported schedule kind")
+	}
+}
+
+// triggerSignature renders a Task Scheduler trigger into the same canonical
+// form as parsedSchedule.signature so the two can be compared for drift. An
+// unexpected or unsupported trigger type yields "", which never matches a
+// desired schedule and therefore reports drift.
+func triggerSignature(t taskmaster.Trigger) string {
+	start := t.GetStartBoundary()
+	clock := fmt.Sprintf("%02d:%02d", start.Hour(), start.Minute())
+	switch tr := t.(type) {
+	case taskmaster.DailyTrigger:
+		return fmt.Sprintf("daily %s", clock)
+	case taskmaster.WeeklyTrigger:
+		return fmt.Sprintf("weekly %s dow=%s", clock, joinInts(weekdaysFromMask(tr.DaysOfWeek)))
+	case taskmaster.MonthlyTrigger:
+		months := "ALL"
+		if tr.MonthsOfYear != taskmaster.AllMonths {
+			months = joinInts(monthsFromMask(tr.MonthsOfYear))
+		}
+		return fmt.Sprintf("monthly %s dom=%s months=%s", clock, joinInts(daysOfMonthFromMask(tr.DaysOfMonth)), months)
+	default:
+		return ""
+	}
+}
+
+// weekdaysToMask converts cron weekday numbers (Sunday=0) into the bitmask used
+// by the Task Scheduler (Sunday is bit 0).
+func weekdaysToMask(days []int) taskmaster.DayOfWeek {
+	var m taskmaster.DayOfWeek
+	for _, d := range days {
+		m |= taskmaster.DayOfWeek(1) << uint(d)
+	}
+	return m
+}
+
+// weekdaysFromMask is the inverse of weekdaysToMask.
+func weekdaysFromMask(m taskmaster.DayOfWeek) []int {
+	var days []int
+	for i := 0; i < 7; i++ {
+		if m&(taskmaster.DayOfWeek(1)<<uint(i)) != 0 {
+			days = append(days, i)
+		}
+	}
+	return days
+}
+
+// daysOfMonthToMask converts day-of-month numbers (1-31) into the bitmask used
+// by the Task Scheduler (day 1 is bit 0).
+func daysOfMonthToMask(days []int) taskmaster.DayOfMonth {
+	var m taskmaster.DayOfMonth
+	for _, d := range days {
+		m |= taskmaster.DayOfMonth(1) << uint(d-1)
+	}
+	return m
+}
+
+// daysOfMonthFromMask is the inverse of daysOfMonthToMask.
+func daysOfMonthFromMask(m taskmaster.DayOfMonth) []int {
+	var days []int
+	for i := 0; i < 31; i++ {
+		if m&(taskmaster.DayOfMonth(1)<<uint(i)) != 0 {
+			days = append(days, i+1)
+		}
+	}
+	return days
+}
+
+// monthsToMask converts month numbers (1-12) into the bitmask used by the Task
+// Scheduler (January is bit 0). An empty slice means every month.
+func monthsToMask(months []int) taskmaster.Month {
+	if len(months) == 0 {
+		return taskmaster.AllMonths
+	}
+	var m taskmaster.Month
+	for _, mo := range months {
+		m |= taskmaster.Month(1) << uint(mo-1)
+	}
+	return m
+}
+
+// monthsFromMask is the inverse of monthsToMask for a specific (non-all) mask.
+func monthsFromMask(m taskmaster.Month) []int {
+	var months []int
+	for i := 0; i < 12; i++ {
+		if m&(taskmaster.Month(1)<<uint(i)) != 0 {
+			months = append(months, i+1)
+		}
+	}
+	return months
 }
 
 // deleteTask removes a task by name.
