@@ -55,7 +55,7 @@ type File struct {
 	Checksum     string // expected SHA-256 hex digest (required with URL)
 	BlockName    string // when set, manages a tagged block instead of the entire file
 	BlockComment string // comment prefix for block markers (default: "#")
-	State        string // "present" or "absent" (only for block mode)
+	State        string // "present" or "absent" (absent removes the file, or the block in block mode)
 	Critical     bool
 	FS           extensions.FS // nil uses the real OS filesystem
 }
@@ -71,7 +71,7 @@ type Opts struct {
 	Checksum     string // expected SHA-256 hex digest (required with URL)
 	BlockName    string // when set, manages a tagged block instead of the entire file
 	BlockComment string // comment prefix for block markers (default: "#")
-	State        string // "present" or "absent" (only for block mode)
+	State        string // "present" or "absent" (absent removes the file, or the block in block mode)
 	Critical     bool
 	FS           extensions.FS // inject a mock for testing
 }
@@ -145,6 +145,11 @@ func (f *File) mode() (string, error) {
 	if f.URL != "" && f.Content != "" {
 		return "", fmt.Errorf("file %s: Content and URL are mutually exclusive", f.Path)
 	}
+	// Whole-file "absent" means delete the file; it cannot be combined with
+	// content-producing fields. (Block mode handles its own absent semantics.)
+	if f.State == "absent" && f.BlockName == "" && (f.Content != "" || f.URL != "" || f.Append) {
+		return "", fmt.Errorf("file %s: State \"absent\" cannot be combined with Content, URL, or Append", f.Path)
+	}
 	return active, nil
 }
 
@@ -189,6 +194,17 @@ func (f *File) checkFull() (*extensions.State, error) {
 	absPath, err := filepath.Abs(f.Path)
 	if err != nil {
 		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
+	}
+	// Whole-file absent: in sync only when the file does not exist.
+	if f.State == "absent" {
+		if _, statErr := f.fsys().Stat(absPath); isNotExist(statErr) {
+			return &extensions.State{InSync: true}, nil
+		} else if statErr != nil {
+			return nil, fmt.Errorf("stat %s: %w", absPath, statErr)
+		}
+		return &extensions.State{InSync: false, Changes: []extensions.Change{
+			{Property: "state", From: "present", To: "absent", Action: "remove"},
+		}}, nil
 	}
 	info, err := f.fsys().Stat(absPath)
 	if isNotExist(err) {
@@ -236,6 +252,17 @@ func (f *File) applyFull() (*extensions.Result, error) {
 	absPath, err := filepath.Abs(f.Path)
 	if err != nil {
 		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
+	}
+
+	// Whole-file absent: remove the file (no-op if already gone).
+	if f.State == "absent" {
+		if err := f.fsys().Remove(absPath); err != nil {
+			if isNotExist(err) {
+				return &extensions.Result{Changed: false, Status: extensions.StatusOK, Message: "already absent"}, nil
+			}
+			return nil, fmt.Errorf("remove %s: %w", absPath, err)
+		}
+		return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "removed"}, nil
 	}
 
 	dir := filepath.Dir(absPath)

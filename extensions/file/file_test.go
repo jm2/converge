@@ -329,6 +329,58 @@ func TestFile_MapFS_CheckAndApply(t *testing.T) {
 	}
 }
 
+func TestFile_MapFS_WholeFileAbsent(t *testing.T) {
+	ctx := context.Background()
+	mfs := testutil.NewMapFS()
+	mfs.Set("/etc/legacy.conf", []byte("old\n"), 0644)
+
+	f := New("/etc/legacy.conf", Opts{State: "absent", FS: mfs})
+
+	// Drift: the file exists but is declared absent.
+	state, err := f.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if state.InSync {
+		t.Fatal("should report drift when an absent-managed file exists")
+	}
+
+	// Apply removes it.
+	res, err := f.Apply(ctx)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if !res.Changed {
+		t.Error("Apply should report Changed when removing the file")
+	}
+	if _, ok := mfs.Get("/etc/legacy.conf"); ok {
+		t.Error("file should be removed from MapFS after Apply")
+	}
+
+	// Idempotent: now in sync; Apply is a no-op.
+	state, err = f.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if !state.InSync {
+		t.Error("should be in sync once the file is absent")
+	}
+	res, err = f.Apply(ctx)
+	if err != nil {
+		t.Fatalf("Apply() (no-op) error = %v", err)
+	}
+	if res.Changed {
+		t.Error("Apply should be a no-op when the file is already absent")
+	}
+}
+
+func TestFile_AbsentRejectsContent(t *testing.T) {
+	f := New("/etc/x", Opts{State: "absent", Content: "oops"})
+	if _, err := f.Check(context.Background()); err == nil {
+		t.Error("State=absent combined with Content should be rejected")
+	}
+}
+
 func TestFile_MapFS_Append(t *testing.T) {
 	ctx := context.Background()
 	mfs := testutil.NewMapFS()
