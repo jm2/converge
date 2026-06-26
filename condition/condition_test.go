@@ -137,6 +137,31 @@ func TestNetworkReachable_Met(t *testing.T) {
 	})
 }
 
+func TestNetworkReachable_Met_CtxCancelReturnsPromptly(t *testing.T) {
+	t.Parallel()
+
+	// Met must honor ctx: a cancelled context should abort the dial well
+	// before the 2s dial timeout would otherwise elapse.
+	c := condition.NetworkReachable("240.0.0.1", 9) // TEST-NET, nothing listens
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel up front
+
+	start := time.Now()
+	met, err := c.Met(ctx)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Met() error = %v", err)
+	}
+	if met {
+		t.Error("expected Met=false for unreachable host")
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("Met() took %v with cancelled ctx, expected prompt return", elapsed)
+	}
+}
+
 func TestNetworkInterface_Met(t *testing.T) {
 	t.Parallel()
 
