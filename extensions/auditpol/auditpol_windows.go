@@ -27,6 +27,11 @@ const (
 	auditingFailure           = 0x2
 	auditingSuccessAndFailure = auditingSuccess | auditingFailure
 	auditingNone              = 0x0
+	// auditingNoneSet is POLICY_AUDIT_EVENT_NONE — the value AuditSetSystemPolicy
+	// requires to actively DISABLE auditing. 0x0 means POLICY_AUDIT_EVENT_UNCHANGED
+	// to the setter (a no-op), even though AuditQuerySystemPolicy reports 0 for
+	// "no auditing". The two representations must be bridged.
+	auditingNoneSet = 0x4
 )
 
 // auditPolicyInformation maps to AUDIT_POLICY_INFORMATION from the Win32 API.
@@ -81,7 +86,7 @@ func (a *AuditPolicy) Apply(_ context.Context) (*extensions.Result, error) {
 
 	policy := auditPolicyInformation{
 		AuditSubCategoryGuid: guid,
-		AuditingInformation:  a.desiredFlags(),
+		AuditingInformation:  a.desiredSetFlags(),
 	}
 
 	ret, _, err := procAuditSetSystemPolicy.Call(
@@ -95,6 +100,8 @@ func (a *AuditPolicy) Apply(_ context.Context) (*extensions.Result, error) {
 	return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "set"}, nil
 }
 
+// desiredFlags returns the desired auditing flags in QUERY representation
+// (0 = no auditing), for comparison against AuditQuerySystemPolicy output.
 func (a *AuditPolicy) desiredFlags() uint32 {
 	var flags uint32
 	if a.Success {
@@ -104,6 +111,17 @@ func (a *AuditPolicy) desiredFlags() uint32 {
 		flags |= auditingFailure
 	}
 	return flags
+}
+
+// desiredSetFlags returns the desired flags in SET representation: when no
+// auditing is requested it returns POLICY_AUDIT_EVENT_NONE (0x4) so
+// AuditSetSystemPolicy actually disables auditing instead of treating 0x0 as
+// "leave unchanged".
+func (a *AuditPolicy) desiredSetFlags() uint32 {
+	if f := a.desiredFlags(); f != auditingNone {
+		return f
+	}
+	return auditingNoneSet
 }
 
 func flagsToString(f uint32) string {
