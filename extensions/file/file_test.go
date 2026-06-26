@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/TsekNet/converge/internal/shell"
@@ -372,6 +373,40 @@ func TestFile_MapFS_WholeFileAbsent(t *testing.T) {
 	}
 	if res.Changed {
 		t.Error("Apply should be a no-op when the file is already absent")
+	}
+}
+
+// TestFile_SensitiveRedactsContent verifies a Sensitive file never emits its
+// content into Check diffs (which flow to plan/JSON/log output).
+func TestFile_SensitiveRedactsContent(t *testing.T) {
+	ctx := context.Background()
+	const secret = "TOP-SECRET-VALUE"
+
+	// Modify case: existing file differs.
+	mfs := testutil.NewMapFS()
+	mfs.Set("/etc/secret", []byte("old-secret-content"), 0600)
+	f := New("/etc/secret", Opts{Content: secret, Mode: 0600, Sensitive: true, FS: mfs})
+	st, err := f.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	for _, c := range st.Changes {
+		if strings.Contains(c.From, "old-secret") || strings.Contains(c.To, secret) {
+			t.Errorf("sensitive content leaked into change: %+v", c)
+		}
+	}
+
+	// Create case: new file.
+	mfs2 := testutil.NewMapFS()
+	f2 := New("/etc/new-secret", Opts{Content: secret, Sensitive: true, FS: mfs2})
+	st2, err := f2.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check (create): %v", err)
+	}
+	for _, c := range st2.Changes {
+		if strings.Contains(c.To, secret) {
+			t.Errorf("sensitive content leaked into create change: %+v", c)
+		}
 	}
 }
 
