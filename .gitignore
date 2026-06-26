@@ -29,3 +29,6 @@ Thumbs.db
 
 # Temp
 *.tmp
+
+# Claude Code worktrees/session data
+.claude/
