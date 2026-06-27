@@ -212,7 +212,10 @@ func safeDecode(fn decodeFunc, name string, body hcl.Body, dctx *decodeContext) 
 	if ext != nil && !diags.HasErrors() {
 		if v, ok := ext.(interface{ Validate() error }); ok {
 			if err := v.Validate(); err != nil {
-				return nil, hcl.Diagnostics{errDiag("invalid resource", err.Error(), body.MissingItemRange().Ptr())}
+				// Append rather than replace so any non-error diagnostics (e.g.
+				// warnings) the decoder accumulated are preserved alongside the
+				// validation error.
+				return nil, append(diags, errDiag("invalid resource", err.Error(), body.MissingItemRange().Ptr()))
 			}
 		}
 	}
