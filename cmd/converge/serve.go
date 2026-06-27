@@ -10,6 +10,7 @@ import (
 
 	"github.com/TsekNet/converge/internal/daemon"
 	"github.com/TsekNet/converge/internal/exit"
+	"github.com/TsekNet/converge/internal/graph"
 	"github.com/TsekNet/converge/internal/platform"
 	"github.com/spf13/cobra"
 )
@@ -20,7 +21,7 @@ var (
 )
 
 var serveCmd = &cobra.Command{
-	Use:   "serve [blueprint]",
+	Use:   "serve [blueprint|manifest.hcl]",
 	Short: "Run as a persistent service, re-converging on drift",
 	Long: `Run as a persistent daemon that monitors all resources for state drift
 and re-converges immediately.
@@ -39,7 +40,15 @@ Use --timeout to exit after the system has been stable for a given duration:
 		printer.Banner(app.Version())
 		printer.BlueprintHeader(args[0])
 
-		run, err := app.BuildGraph(args[0])
+		// HCL manifest path or registered blueprint name; both yield a graph
+		// the daemon consumes identically.
+		var run *graph.Graph
+		var err error
+		if isManifestPath(args[0]) {
+			run, err = loadManifestGraph(args[0])
+		} else {
+			run, err = app.BuildGraph(args[0])
+		}
 		if err != nil {
 			exitWithError(exit.Error, err)
 		}

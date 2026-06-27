@@ -120,6 +120,7 @@ converge plan baseline --detailed-exit-codes  # granular exit codes for CI
 | [Design](docs/design.md) | Philosophy, architecture, DAG engine, event-driven daemon, native API strategy |
 | [Examples](docs/examples.md) | Blueprint writing, composition, testing, full resource reference with per-platform examples |
 | [CLI](docs/cli.md) | Commands, flags, exit codes, output formats |
+| [HCL](docs/hcl.md) | Authoring configuration as HCL manifests (`converge plan/serve site.hcl`) |
 | [Extensions](docs/extensions.md) | Adding new extensions and platform-specific resources |
 | [Blueprints](blueprints/) | Built-in blueprints including [CIS benchmarks](blueprints/cis/) |
 

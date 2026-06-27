@@ -11,10 +11,10 @@ Command-line interface for the Converge configuration management tool.
 Run as a persistent daemon, watching for drift and re-converging immediately.
 
 ```
-converge serve <blueprint> [flags]
+converge serve <blueprint | manifest.hcl> [flags]
 ```
 
-Builds a DAG of all resources, performs initial convergence, then starts per-resource watchers. Resources with native OS event support (File via inotify, Service via dbus) detect drift instantly. Others poll at configurable intervals.
+The argument is a registered blueprint name, or a path ending in `.hcl` (an [HCL manifest](hcl.md)). Builds a DAG of all resources, performs initial convergence, then starts per-resource watchers. Resources with native OS event support (File via inotify, Service via dbus) detect drift instantly. Others poll at configurable intervals.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -28,10 +28,10 @@ Requires root (exit 10 if not).
 Show what would change without modifying the system.
 
 ```
-converge plan <blueprint>
+converge plan <blueprint | manifest.hcl>
 ```
 
-Runs `Check()` on every resource in topological order and prints a grouped diff. Does not require root.
+Runs `Check()` on every resource in topological order and prints a grouped diff. Accepts a blueprint name or an [HCL manifest](hcl.md) path (`.hcl`). Does not require root.
 
 ### converge list
 
