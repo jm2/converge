@@ -188,11 +188,19 @@ func Load(filename string, src []byte) (*graph.Graph, hcl.Diagnostics) {
 	return g, diags
 }
 
-// safeDecode runs a resource decoder, converting a panic into a diagnostic.
-// Several extension constructors (e.g. firewall.New) validate their input and
-// panic on a violation, treating bad input as a programming error. That is fine
-// for Go blueprints, but an HCL manifest is runtime-parsed user input, so such a
-// failure must surface as an error rather than crash the process.
+// safeDecode runs a resource decoder and rejects invalid input at parse time.
+// An HCL manifest is runtime-parsed user input, so a malformed resource must
+// surface as a diagnostic rather than slip into the graph or crash the process.
+// Two construction-time validation styles are handled:
+//
+//   - Panic: some extension constructors treat bad input as a programming error
+//     and panic. That is fine for Go blueprints (compile-time authored) but not
+//     for a manifest, so the panic is recovered into a diagnostic.
+//   - Recorded error: per the no-panic hardening contract, some constructors
+//     (e.g. firewall.New) record a validation failure instead of panicking so a
+//     single bad rule cannot abort an entire converge run. Those expose the
+//     failure via a Validate() error method; we call it here so the manifest is
+//     still rejected eagerly rather than deferring the error to Check time.
 func safeDecode(fn decodeFunc, name string, body hcl.Body, dctx *decodeContext) (ext extensions.Extension, diags hcl.Diagnostics) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -200,7 +208,15 @@ func safeDecode(fn decodeFunc, name string, body hcl.Body, dctx *decodeContext) 
 			diags = hcl.Diagnostics{errDiag("invalid resource", fmt.Sprintf("%v", r), body.MissingItemRange().Ptr())}
 		}
 	}()
-	return fn(name, body, dctx)
+	ext, diags = fn(name, body, dctx)
+	if ext != nil && !diags.HasErrors() {
+		if v, ok := ext.(interface{ Validate() error }); ok {
+			if err := v.Validate(); err != nil {
+				return nil, hcl.Diagnostics{errDiag("invalid resource", err.Error(), body.MissingItemRange().Ptr())}
+			}
+		}
+	}
+	return ext, diags
 }
 
 // resourceKey returns the key portion of an extension ID ("type:key"), e.g.
