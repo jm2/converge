@@ -41,7 +41,10 @@ func (s *Service) checkLaunchd(ctx context.Context) (*extensions.State, error) {
 
 	out, err := exec.CommandContext(ctx, "launchctl", "list", s.Name).Output()
 	loaded := err == nil
-	isRunning := loaded && strings.Contains(string(out), `"PID"`)
+	// Match the "PID" key with its delimiter (launchctl prints `"PID" = N;`)
+	// rather than a bare "PID", so a value/argument literally named "PID"
+	// cannot be mistaken for a running job.
+	isRunning := loaded && strings.Contains(string(out), `"PID" =`)
 
 	wantRunning := s.State == "running"
 	if isRunning != wantRunning {
