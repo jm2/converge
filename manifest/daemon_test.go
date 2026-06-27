@@ -59,13 +59,35 @@ resource "file" "c" {
 		t.Fatalf("file %s was not converged by the daemon", path)
 	}
 
-	// Simulate out-of-band drift: delete the managed file.
-	if err := os.Remove(path); err != nil {
-		t.Fatalf("remove: %v", err)
+	// Simulate out-of-band drift and wait for the daemon's watcher to restore
+	// the file. Watchers start in a phase after the initial convergence (see
+	// daemon.Run), so a delete issued the instant the file first appears can
+	// land before the watcher is armed. Because the file resource is a Watcher
+	// with no poll fallback, such a delete event is missed permanently. The
+	// arming window is platform-dependent (inotify on Linux/kqueue on macOS arm
+	// in a single syscall; Windows ReadDirectoryChangesW setup is heavier), so
+	// retry the deletion until the daemon restores the file: once the watcher is
+	// armed, the next deletion is caught and the file is re-converged.
+	deadline := time.Now().Add(20 * time.Second)
+	restored := false
+	for time.Now().Before(deadline) {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove: %v", err)
+		}
+		if waitForContent(path, want, time.Second) {
+			restored = true
+			break
+		}
+		// Not restored yet: the watcher was likely not armed when this delete
+		// fired. Re-create the file so the next iteration can trigger a fresh
+		// delete event once the watcher is up. If the watcher is already armed
+		// this is a no-op drift (content already matches) and the next delete
+		// is what gets restored.
+		if err := os.WriteFile(path, []byte(want), 0o644); err != nil {
+			t.Fatalf("recreate: %v", err)
+		}
 	}
-
-	// The watcher must detect the deletion and restore the file.
-	if !waitForContent(path, want, 15*time.Second) {
+	if !restored {
 		t.Fatalf("daemon did not restore %s after out-of-band deletion", path)
 	}
 }

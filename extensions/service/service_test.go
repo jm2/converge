@@ -110,14 +110,30 @@ func TestService_Check_Windows(t *testing.T) {
 		t.Skip("windows SCM tests only run on Windows")
 	}
 	ctx := context.Background()
-	s := New("test", Opts{State: "running", Enable: true, InitSystem: "windows"})
-	state, err := s.Check(ctx)
-	if err != nil {
-		t.Fatalf("Check() error = %v", err)
-	}
-	if !state.InSync {
-		t.Error("windows Check should return InSync=true for nonexistent service")
-	}
+
+	// A service that is not installed cannot be opened in the SCM, so Check must
+	// surface an error rather than silently reporting compliance.
+	t.Run("nonexistent", func(t *testing.T) {
+		s := New("converge-definitely-not-real-12345", Opts{State: "running", Enable: true, InitSystem: "windows"})
+		if _, err := s.Check(ctx); err == nil {
+			t.Error("Check() should error for a service that is not installed")
+		}
+	})
+
+	// "Schedule" (Task Scheduler) is present on every Windows install, so it
+	// exercises the real SCM query path. We do not assert running/stopped since
+	// that can legitimately vary by host; only that Check completes and returns
+	// a non-nil state.
+	t.Run("well-known", func(t *testing.T) {
+		s := New("Schedule", Opts{State: "running", Enable: true, InitSystem: "windows"})
+		state, err := s.Check(ctx)
+		if err != nil {
+			t.Fatalf("Check() error = %v", err)
+		}
+		if state == nil {
+			t.Fatal("Check() returned nil state")
+		}
+	})
 }
 
 func TestService_CheckSystemd_StoppedService(t *testing.T) {

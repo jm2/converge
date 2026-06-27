@@ -142,7 +142,16 @@ func (t *Template) Apply(_ context.Context) (*extensions.Result, error) {
 		return nil, err
 	}
 
-	dir := filepath.Dir(t.Path)
+	// Resolve to an absolute path so Apply and Check operate on the same
+	// identifier (Check stats filepath.Abs(t.Path)). On platforms where a
+	// logical path like "/etc/foo" is not absolute (Windows), using the raw
+	// path here would write a key Check never reads.
+	absPath, err := filepath.Abs(t.Path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid path %q: %w", t.Path, err)
+	}
+
+	dir := filepath.Dir(absPath)
 	if err := t.fsys().MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
@@ -151,18 +160,18 @@ func (t *Template) Apply(_ context.Context) (*extensions.Result, error) {
 	if perm == 0 {
 		perm = 0644
 	}
-	if err := t.fsys().WriteFile(t.Path, []byte(rendered), perm); err != nil {
-		return nil, fmt.Errorf("write %s: %w", t.Path, err)
+	if err := t.fsys().WriteFile(absPath, []byte(rendered), perm); err != nil {
+		return nil, fmt.Errorf("write %s: %w", absPath, err)
 	}
 
 	if t.Mode != 0 {
-		if err := t.fsys().Chmod(t.Path, t.Mode); err != nil {
-			return nil, fmt.Errorf("chmod %s: %w", t.Path, err)
+		if err := t.fsys().Chmod(absPath, t.Mode); err != nil {
+			return nil, fmt.Errorf("chmod %s: %w", absPath, err)
 		}
 	}
 
-	if err := extensions.ApplyOwnership(t.fsys(), t.Path, t.Owner, t.Group); err != nil {
-		return nil, fmt.Errorf("chown %s: %w", t.Path, err)
+	if err := extensions.ApplyOwnership(t.fsys(), absPath, t.Owner, t.Group); err != nil {
+		return nil, fmt.Errorf("chown %s: %w", absPath, err)
 	}
 
 	return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "rendered"}, nil

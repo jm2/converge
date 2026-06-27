@@ -4,11 +4,27 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
+	"github.com/TsekNet/converge/extensions"
 	"github.com/TsekNet/converge/internal/shell"
 	"github.com/TsekNet/converge/internal/testutil"
 )
+
+// dropModeChanges removes "mode" drift from a change set. On Windows, os.Stat
+// reports a synthetic 0666 (Go only models the read-only bit), so Unix mode
+// bits cannot be observed or asserted; mode drift there is not meaningful.
+func dropModeChanges(changes []extensions.Change) []extensions.Change {
+	var out []extensions.Change
+	for _, c := range changes {
+		if c.Property == "mode" {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
 
 func TestTemplate_ID(t *testing.T) {
 	tmpl := New("/etc/nginx/nginx.conf", Opts{})
@@ -44,6 +60,7 @@ func TestTemplate_Check(t *testing.T) {
 		tmpl        func(dir string) *Template
 		wantSync    bool
 		wantChanges int
+		skipWindows bool // case asserts Unix mode drift, not observable on Windows
 	}{
 		{
 			"file does not exist",
@@ -51,7 +68,7 @@ func TestTemplate_Check(t *testing.T) {
 			func(dir string) *Template {
 				return New(filepath.Join(dir, "new.conf"), Opts{Source: "server {{ .Host }}", Vars: map[string]string{"Host": "localhost"}, Mode: 0644})
 			},
-			false, 2,
+			false, 2, false,
 		},
 		{
 			"file matches rendered output",
@@ -64,7 +81,7 @@ func TestTemplate_Check(t *testing.T) {
 			func(dir string) *Template {
 				return New(filepath.Join(dir, "ok.conf"), Opts{Source: "server {{ .Host }}", Vars: map[string]string{"Host": "localhost"}, Mode: 0644})
 			},
-			true, 0,
+			true, 0, false,
 		},
 		{
 			"file content differs",
@@ -77,7 +94,7 @@ func TestTemplate_Check(t *testing.T) {
 			func(dir string) *Template {
 				return New(filepath.Join(dir, "drift.conf"), Opts{Source: "server {{ .Host }}", Vars: map[string]string{"Host": "new-host"}, Mode: 0644})
 			},
-			false, 1,
+			false, 1, false,
 		},
 		{
 			"mode differs",
@@ -90,7 +107,7 @@ func TestTemplate_Check(t *testing.T) {
 			func(dir string) *Template {
 				return New(filepath.Join(dir, "mode.conf"), Opts{Source: "server {{ .Host }}", Vars: map[string]string{"Host": "localhost"}, Mode: 0644})
 			},
-			false, 1,
+			false, 1, true,
 		},
 		{
 			"nil vars with no placeholders",
@@ -103,11 +120,14 @@ func TestTemplate_Check(t *testing.T) {
 			func(dir string) *Template {
 				return New(filepath.Join(dir, "static.conf"), Opts{Source: "static content", Mode: 0644})
 			},
-			true, 0,
+			true, 0, false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.skipWindows && runtime.GOOS == "windows" {
+				t.Skip("Unix file-mode drift is not observable on Windows (os.Stat reports 0666)")
+			}
 			dir := t.TempDir()
 			tt.setup(t, dir)
 			tmpl := tt.tmpl(dir)
@@ -116,11 +136,21 @@ func TestTemplate_Check(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Check() error = %v", err)
 			}
-			if state.InSync != tt.wantSync {
-				t.Errorf("InSync = %v, want %v", state.InSync, tt.wantSync)
+
+			changes := state.Changes
+			inSync := state.InSync
+			if runtime.GOOS == "windows" {
+				// Drop uncontrollable mode drift before comparing; the
+				// content portion of each case still asserts cross-platform.
+				changes = dropModeChanges(changes)
+				inSync = len(changes) == 0
 			}
-			if len(state.Changes) != tt.wantChanges {
-				t.Errorf("len(Changes) = %d, want %d: %+v", len(state.Changes), tt.wantChanges, state.Changes)
+
+			if inSync != tt.wantSync {
+				t.Errorf("InSync = %v, want %v", inSync, tt.wantSync)
+			}
+			if len(changes) != tt.wantChanges {
+				t.Errorf("len(Changes) = %d, want %d: %+v", len(changes), tt.wantChanges, changes)
 			}
 		})
 	}
@@ -199,7 +229,15 @@ func TestTemplate_Apply(t *testing.T) {
 			},
 			func(t *testing.T, dir string) {
 				t.Helper()
-				info, _ := os.Stat(filepath.Join(dir, "secret.conf"))
+				info, err := os.Stat(filepath.Join(dir, "secret.conf"))
+				if err != nil {
+					t.Fatalf("stat: %v", err)
+				}
+				if runtime.GOOS == "windows" {
+					// Windows does not honor Unix permission bits; os.Stat
+					// reports 0666. File existence is asserted above.
+					return
+				}
 				if info.Mode().Perm() != 0600 {
 					t.Errorf("mode = %04o, want 0600", info.Mode().Perm())
 				}
@@ -240,7 +278,14 @@ func TestTemplate_CheckThenApplyIdempotent(t *testing.T) {
 
 	tmpl2 := New(path, Opts{Source: "value={{ .X }}", Vars: map[string]string{"X": "1"}, Mode: 0644})
 	state, _ = tmpl2.Check(ctx)
-	if !state.InSync {
+
+	inSync := state.InSync
+	if runtime.GOOS == "windows" {
+		// Mode bits are not controllable on Windows, so post-Apply Check
+		// reports synthetic mode drift; ignore it and assert content sync.
+		inSync = len(dropModeChanges(state.Changes)) == 0
+	}
+	if !inSync {
 		t.Errorf("should be in sync after Apply, changes: %+v", state.Changes)
 	}
 }
@@ -297,7 +342,13 @@ func TestTemplate_MapFS_CheckAndApply(t *testing.T) {
 	})
 	testutil.AssertConverges(t, tmpl)
 
-	data, ok := mfs.Get("/etc/nginx.conf")
+	// Check/Apply normalize the path via filepath.Abs (identity on Unix),
+	// so read back using the same normalized key the resource wrote.
+	key, err := filepath.Abs("/etc/nginx.conf")
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	data, ok := mfs.Get(key)
 	if !ok {
 		t.Fatal("file should exist in MapFS")
 	}
