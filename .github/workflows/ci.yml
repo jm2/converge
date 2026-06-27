@@ -8,7 +8,22 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            race: "-race"
+          - os: macos-latest
+            race: "-race"
+          - os: windows-latest
+            race: "" # -race needs a C toolchain (CGO) on Windows; skip it there
+    runs-on: ${{ matrix.os }}
+    # The macOS and Windows legs run here only to capture coverage of the
+    # _darwin.go / _windows.go code paths that the Linux runner cannot execute.
+    # Those tests have never been gated on before, so keep them non-blocking
+    # until confirmed green; delete this line to make them required.
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -17,21 +32,28 @@ jobs:
           go-version-file: go.mod
 
       - name: Vet
+        if: matrix.os == 'ubuntu-latest'
         run: go vet ./...
 
       - name: Cross-compile (Windows)
+        if: matrix.os == 'ubuntu-latest'
         run: GOOS=windows GOARCH=amd64 go build ./...
 
       - name: Cross-compile (macOS)
+        if: matrix.os == 'ubuntu-latest'
         run: GOOS=darwin GOARCH=amd64 go build ./...
 
       - name: Test
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic -count=1 ./...
+        shell: bash
+        run: go test -v ${{ matrix.race }} -coverprofile=coverage.txt -covermode=atomic -count=1 ./...
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.txt
+          flags: ${{ runner.os }}
+          name: ${{ runner.os }}
 
   integration:
     runs-on: ubuntu-latest
