@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,26 @@ import (
 	"github.com/TsekNet/converge/internal/shell"
 	"github.com/TsekNet/converge/internal/testutil"
 )
+
+// TestFile_MapFS_SpecialModeIdempotent ensures setuid/setgid/sticky modes round
+// trip: Apply sets the full mode and a follow-up Check reports in sync (no
+// perpetual drift from comparing only the permission bits).
+func TestFile_MapFS_SpecialModeIdempotent(t *testing.T) {
+	ctx := context.Background()
+	mfs := testutil.NewMapFS()
+	f := New("/usr/local/bin/tool", Opts{Content: "#!/bin/sh\n", Mode: 0o755 | fs.ModeSetuid, FS: mfs})
+
+	if _, err := f.Apply(ctx); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	st, err := f.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !st.InSync {
+		t.Errorf("setuid file should be in sync after Apply, changes: %+v", st.Changes)
+	}
+}
 
 func TestFile_Check(t *testing.T) {
 	ctx := context.Background()

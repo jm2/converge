@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -212,12 +213,30 @@ resource "file" "x" {
 }
 
 func TestParseFileMode(t *testing.T) {
-	m, err := parseFileMode("0644")
-	if err != nil {
-		t.Fatalf("parseFileMode(0644): %v", err)
+	tests := []struct {
+		in   string
+		want fs.FileMode
+	}{
+		{"0644", 0o644},
+		{"0755", 0o755},
+		{"4755", 0o755 | fs.ModeSetuid}, // setuid
+		{"2755", 0o755 | fs.ModeSetgid}, // setgid
+		{"1777", 0o777 | fs.ModeSticky}, // sticky
+		{"6755", 0o755 | fs.ModeSetuid | fs.ModeSetgid},
 	}
-	if m.Perm() != 0o644 {
-		t.Fatalf("parseFileMode(0644) = %04o, want 0644", m.Perm())
+	for _, tt := range tests {
+		got, err := parseFileMode(tt.in)
+		if err != nil {
+			t.Errorf("parseFileMode(%q): %v", tt.in, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("parseFileMode(%q) = %v (%#o), want %v", tt.in, got, uint32(got), tt.want)
+		}
+	}
+
+	if _, err := parseFileMode("not-octal"); err == nil {
+		t.Error("parseFileMode(non-octal) should error")
 	}
 }
 

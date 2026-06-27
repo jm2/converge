@@ -126,6 +126,36 @@ func isNotExist(err error) bool {
 	return errors.Is(err, fs.ErrNotExist) || os.IsNotExist(err)
 }
 
+// modeMask is the set of fs.FileMode bits the file resource manages: the 9
+// permission bits plus the setuid/setgid/sticky special bits. Comparing against
+// this mask (rather than Mode().Perm(), which is perm-only) ensures special bits
+// are detected — otherwise a setuid/setgid/sticky file would report perpetual
+// drift or never be corrected.
+const modeMask = fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky
+
+// modeDrift reports whether the current mode differs from the desired one across
+// the managed bits. A desired mode of 0 means "unmanaged" (no opinion).
+func (f *File) modeDrift(current fs.FileMode) bool {
+	return f.Mode != 0 && current&modeMask != f.Mode&modeMask
+}
+
+// posixMode renders an fs.FileMode as a 4-digit POSIX octal string, including
+// the setuid/setgid/sticky bits (which fs.FileMode keeps as high-bit flags, so a
+// plain %o would print a meaningless large number).
+func posixMode(m fs.FileMode) string {
+	o := uint32(m.Perm())
+	if m&fs.ModeSetuid != 0 {
+		o |= 0o4000
+	}
+	if m&fs.ModeSetgid != 0 {
+		o |= 0o2000
+	}
+	if m&fs.ModeSticky != 0 {
+		o |= 0o1000
+	}
+	return fmt.Sprintf("%04o", o)
+}
+
 // mode returns the active mode: "block", "remote", or "content".
 // Returns an error if multiple mutually exclusive fields are set.
 func (f *File) mode() (string, error) {
@@ -198,7 +228,7 @@ func (f *File) checkFull() (*extensions.State, error) {
 		}
 		if f.Mode != 0 {
 			changes = append(changes, extensions.Change{
-				Property: "mode", To: fmt.Sprintf("%04o", f.Mode), Action: "add",
+				Property: "mode", To: posixMode(f.Mode), Action: "add",
 			})
 		}
 		return &extensions.State{InSync: false, Changes: changes}, nil
@@ -219,11 +249,11 @@ func (f *File) checkFull() (*extensions.State, error) {
 		}
 	}
 
-	if f.Mode != 0 && info.Mode().Perm() != f.Mode {
+	if f.modeDrift(info.Mode()) {
 		changes = append(changes, extensions.Change{
 			Property: "mode",
-			From:     fmt.Sprintf("%04o", info.Mode().Perm()),
-			To:       fmt.Sprintf("%04o", f.Mode),
+			From:     posixMode(info.Mode()),
+			To:       posixMode(f.Mode),
 			Action:   "modify",
 		})
 	}
@@ -309,11 +339,11 @@ func (f *File) checkRemote() (*extensions.State, error) {
 		})
 	}
 
-	if f.Mode != 0 && info.Mode().Perm() != f.Mode {
+	if f.modeDrift(info.Mode()) {
 		changes = append(changes, extensions.Change{
 			Property: "mode",
-			From:     fmt.Sprintf("%04o", info.Mode().Perm()),
-			To:       fmt.Sprintf("%04o", f.Mode),
+			From:     posixMode(info.Mode()),
+			To:       posixMode(f.Mode),
 			Action:   "modify",
 		})
 	}

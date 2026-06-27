@@ -62,7 +62,20 @@ func parseFileMode(s string) (fs.FileMode, error) {
 	if err != nil {
 		return 0, fmt.Errorf("mode must be octal (e.g. \"0644\"): %w", err)
 	}
-	return fs.FileMode(n), nil
+	// POSIX octal carries setuid/setgid/sticky in the 0o7000 bits, but Go's
+	// fs.FileMode stores them as high-bit flags. A raw cast would leave them in
+	// the wrong position and os.Chmod would silently drop them, so map explicitly.
+	mode := fs.FileMode(n & 0o777)
+	if n&0o4000 != 0 {
+		mode |= fs.ModeSetuid
+	}
+	if n&0o2000 != 0 {
+		mode |= fs.ModeSetgid
+	}
+	if n&0o1000 != 0 {
+		mode |= fs.ModeSticky
+	}
+	return mode, nil
 }
 
 // parseDuration parses a Go duration string (e.g. "5s", "2m") for resource
