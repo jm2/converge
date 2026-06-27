@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -45,8 +46,13 @@ type Reboot struct {
 // New returns a Reboot with the given name. Path separators are stripped
 // to prevent sentinel file path traversal; empty or dot-only names are
 // rejected by the DSL require() check.
+//
+// The name is a logical identifier (used in ID and as the sentinel filename
+// stem), so sanitization uses path.Base (forward-slash semantics) rather than
+// filepath.Base, keeping results OS-independent: backslashes are normalized to
+// slashes first so a name like a\b\c reduces to c on every platform.
 func New(name string, opts Opts) *Reboot {
-	name = filepath.Base(strings.ReplaceAll(name, `\`, "/"))
+	name = path.Base(strings.ReplaceAll(name, `\`, "/"))
 	if name == "." {
 		name = ""
 	}

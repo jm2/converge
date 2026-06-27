@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"path/filepath"
+	"path"
 	"strings"
 
 	"github.com/TsekNet/converge/extensions"
@@ -91,9 +91,9 @@ func (r *Repository) fsys() extensions.FS { return extensions.RealFS(r.FS) }
 func (r *Repository) repoFilePath() string {
 	switch r.ManagerName {
 	case "apt":
-		return filepath.Join("/etc/apt/sources.list.d", r.Name+".list")
+		return path.Join("/etc/apt/sources.list.d", r.Name+".list")
 	case "dnf", "yum":
-		return filepath.Join("/etc/yum.repos.d", r.Name+".repo")
+		return path.Join("/etc/yum.repos.d", r.Name+".repo")
 	default:
 		return ""
 	}
@@ -182,25 +182,25 @@ func (r *Repository) Apply(_ context.Context) (*extensions.Result, error) {
 		return nil, err
 	}
 
-	path := r.repoFilePath()
-	if path == "" {
+	filePath := r.repoFilePath()
+	if filePath == "" {
 		return nil, fmt.Errorf("unsupported package manager for repositories: %q", r.ManagerName)
 	}
 
 	if r.State == "absent" {
-		if err := r.fsys().Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("remove %s: %w", path, err)
+		if err := r.fsys().Remove(filePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("remove %s: %w", filePath, err)
 		}
 		return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "removed"}, nil
 	}
 
-	dir := filepath.Dir(path)
+	dir := path.Dir(filePath)
 	if err := r.fsys().MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 
-	if err := r.fsys().WriteFile(path, []byte(r.repoContent()), 0644); err != nil {
-		return nil, fmt.Errorf("write %s: %w", path, err)
+	if err := r.fsys().WriteFile(filePath, []byte(r.repoContent()), 0644); err != nil {
+		return nil, fmt.Errorf("write %s: %w", filePath, err)
 	}
 
 	return &extensions.Result{Changed: true, Status: extensions.StatusChanged, Message: "configured"}, nil

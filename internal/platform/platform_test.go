@@ -21,11 +21,11 @@ func TestDetect_PlatformSpecific(t *testing.T) {
 	info := Detect()
 
 	tests := []struct {
-		name       string
-		goos       string
-		field      string
-		got        string
-		want       string
+		name  string
+		goos  string
+		field string
+		got   string
+		want  string
 	}{
 		{"darwin init system", "darwin", "InitSystem", info.InitSystem, "launchd"},
 		{"darwin distro", "darwin", "Distro", info.Distro, "macos"},
@@ -97,8 +97,19 @@ func TestDetect_LinuxAssertions(t *testing.T) {
 func TestIsRoot(t *testing.T) {
 	t.Parallel()
 
-	// Tests never run as root, so IsRoot should return false.
-	if IsRoot() {
+	got := IsRoot()
+
+	// On Windows, CI runners (e.g. GitHub-hosted) execute elevated as
+	// Administrator, so IsRoot() legitimately returns true. The "must be
+	// non-privileged" assumption only holds on Unix, where the test harness
+	// is expected to run as a normal user.
+	if runtime.GOOS == "windows" {
+		t.Logf("IsRoot() = %v (privilege state not asserted on windows)", got)
+		return
+	}
+
+	// On Unix, tests never run as root, so IsRoot should return false.
+	if got {
 		t.Error("IsRoot() = true, want false (tests should not run as root)")
 	}
 }

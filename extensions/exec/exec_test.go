@@ -4,12 +4,25 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/TsekNet/converge/internal/shell"
 )
+
+// guardCommands returns shell command strings that always succeed and always
+// fail on the current platform. Guards run through the auto shell (bash/sh on
+// Unix, PowerShell on Windows). The /bin/true and /bin/false binaries are
+// unavailable on macOS (no /bin/true or /bin/false) and Windows, so use the
+// shell builtins on Unix and explicit exit codes under PowerShell.
+func guardCommands() (succeed, fail string) {
+	if runtime.GOOS == "windows" {
+		return "exit 0", "exit 1"
+	}
+	return "true", "false"
+}
 
 func TestExec_Check_NoGuards(t *testing.T) {
 	ctx := context.Background()
@@ -60,13 +73,14 @@ func TestExec_Check_OnlyIf(t *testing.T) {
 
 	// OnlyIf: run only when the guard command succeeds. When it fails, the
 	// resource is skipped (reported in sync).
+	succeed, fail := guardCommands()
 	tests := []struct {
 		name       string
 		guard      string
 		wantInSync bool
 	}{
-		{"guard succeeds -> runs", "/bin/true", false},
-		{"guard fails -> skip", "/bin/false", true},
+		{"guard succeeds -> runs", succeed, false},
+		{"guard fails -> skip", fail, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -86,13 +100,14 @@ func TestExec_Check_Unless(t *testing.T) {
 	ctx := context.Background()
 
 	// Unless: skip when the guard command succeeds; run when it fails.
+	succeed, fail := guardCommands()
 	tests := []struct {
 		name       string
 		guard      string
 		wantInSync bool
 	}{
-		{"guard succeeds -> skip", "/bin/true", true},
-		{"guard fails -> runs", "/bin/false", false},
+		{"guard succeeds -> skip", succeed, true},
+		{"guard fails -> runs", fail, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -147,6 +162,17 @@ func TestExec_Apply_ErrorOmitsCommandAndTruncates(t *testing.T) {
 func TestExec_Apply(t *testing.T) {
 	ctx := context.Background()
 
+	// "with working directory" runs a bare (non-shell) command inside Dir. Use a
+	// platform-appropriate always-succeed command and a real temp dir, since
+	// /tmp and a bare `pwd`/`false` binary do not exist on Windows.
+	wdDir := t.TempDir()
+	wdExec := &Exec{Name: "pwd", Command: "pwd", Dir: wdDir}
+	falseExec := New("fail", Opts{Command: "false"})
+	if runtime.GOOS == "windows" {
+		wdExec = &Exec{Name: "pwd", Command: "cmd", Args: []string{"/c", "cd"}, Dir: wdDir}
+		falseExec = New("fail", Opts{Command: "cmd", Args: []string{"/c", "exit 1"}})
+	}
+
 	tests := []struct {
 		name    string
 		exec    *Exec
@@ -164,12 +190,12 @@ func TestExec_Apply(t *testing.T) {
 		},
 		{
 			"false command fails",
-			New("fail", Opts{Command: "false"}),
+			falseExec,
 			true,
 		},
 		{
 			"with working directory",
-			&Exec{Name: "pwd", Command: "pwd", Dir: "/tmp"},
+			wdExec,
 			false,
 		},
 	}
@@ -189,6 +215,8 @@ func TestExec_Apply(t *testing.T) {
 func TestExec_Apply_Shell(t *testing.T) {
 	ctx := context.Background()
 
+	// /bin/bash and /bin/sh do not exist on Windows; exercise the platform
+	// shell (PowerShell) there instead of the POSIX shells.
 	tests := []struct {
 		name    string
 		shell   string
@@ -199,6 +227,18 @@ func TestExec_Apply_Shell(t *testing.T) {
 		{"sh echo", shell.Sh, "echo hello", false},
 		{"bash multiline", shell.Bash, "x=42\necho $x", false},
 		{"bash failure", shell.Bash, "exit 1", true},
+	}
+	if runtime.GOOS == "windows" {
+		tests = []struct {
+			name    string
+			shell   string
+			command string
+			wantErr bool
+		}{
+			{"powershell echo", shell.PowerShell, "echo hello", false},
+			{"powershell multiline", shell.PowerShell, "$x=42\necho $x", false},
+			{"powershell failure", shell.PowerShell, "exit 1", true},
+		}
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -217,10 +257,17 @@ func TestExec_Apply_Shell(t *testing.T) {
 func TestExec_Apply_ShellParams(t *testing.T) {
 	ctx := context.Background()
 
+	// Custom ShellParams replace the default shell flags. Use a platform shell
+	// and a flag it accepts: bash trace mode on Unix, PowerShell flags on
+	// Windows (where /bin/bash is unavailable).
+	sh, params := shell.Bash, []string{"-x"} // trace mode
+	if runtime.GOOS == "windows" {
+		sh, params = shell.PowerShell, []string{"-NoProfile", "-NonInteractive"}
+	}
 	e := New("test", Opts{
 		Command:     "echo custom",
-		Shell:       shell.Bash,
-		ShellParams: []string{"-x"}, // trace mode
+		Shell:       sh,
+		ShellParams: params,
 	})
 	result, err := e.Apply(ctx)
 	if err != nil {

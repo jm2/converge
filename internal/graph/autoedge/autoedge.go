@@ -4,7 +4,7 @@
 package autoedge
 
 import (
-	"path/filepath"
+	"path"
 	"strings"
 
 	"github.com/TsekNet/converge/internal/graph"
@@ -74,8 +74,8 @@ func fileToParentDir(g *graph.Graph) error {
 		if autoEdgeDisabled(g, id) {
 			continue
 		}
-		path := strings.TrimPrefix(id, "file:")
-		parentPath := filepath.Dir(path)
+		p := strings.TrimPrefix(id, "file:")
+		parentPath := path.Dir(p)
 		parentID := "file:" + parentPath
 		if parentID == id || g.Node(parentID) == nil {
 			continue
@@ -114,7 +114,7 @@ func serviceToConfigFile(g *graph.Graph) error {
 			}
 			filePath := strings.TrimPrefix(fileID, "file:")
 			// Match as a path component (/svcName/) or exact base filename with known config extension.
-			base := filepath.Base(filePath)
+			base := path.Base(filePath)
 			if strings.Contains(filePath, "/"+svcName+"/") ||
 				base == svcName+".conf" || base == svcName+".cfg" ||
 				base == svcName+".yaml" || base == svcName+".yml" {
