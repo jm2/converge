@@ -15,10 +15,13 @@ import (
 	"github.com/TsekNet/converge/extensions"
 )
 
-const (
-	procModules   = "/proc/modules"
-	modprobeDir   = "/etc/modprobe.d"
-	blacklistFile = "converge-blacklist.conf"
+const blacklistFile = "converge-blacklist.conf"
+
+// procModules and modprobeDir are vars (not consts) so tests can redirect
+// these paths to a temporary directory; they are never reassigned at runtime.
+var (
+	procModules = "/proc/modules"
+	modprobeDir = "/etc/modprobe.d"
 )
 
 // Check reads /proc/modules for loaded state and /etc/modprobe.d/ for blacklist state.

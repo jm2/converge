@@ -17,7 +17,10 @@ func isNotExist(err error) bool {
 	return errors.Is(err, fs.ErrNotExist)
 }
 
-const procSysBase = "/proc/sys"
+// procSysBase is the root of the sysctl pseudo-filesystem. It is a var (not a
+// const) solely so tests can redirect it at a real temp directory to exercise
+// the inotify-based Watch without writing to /proc/sys (which requires root).
+var procSysBase = "/proc/sys"
 
 // Check reads the live kernel value from /proc/sys/<key> and compares it.
 func (s *Sysctl) Check(_ context.Context) (*extensions.State, error) {
