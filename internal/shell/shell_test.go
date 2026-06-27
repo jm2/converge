@@ -190,10 +190,14 @@ func TestCommand(t *testing.T) {
 			}
 			wantBinary, _, _ := Resolve(tt.shell, tt.params)
 			// On Windows, exec.Command resolves a bare name like "pwsh" to its
-			// full path with a ".exe" suffix (e.g. ...\pwsh.exe), so accept that.
-			if cmd.Path != wantBinary &&
-				!strings.HasSuffix(cmd.Path, wantBinary) &&
-				!strings.HasSuffix(cmd.Path, wantBinary+".exe") {
+			// full path with a ".exe" suffix (e.g. ...\pwsh.exe). Windows/macOS
+			// filesystems are also case-insensitive, so compare case-folded and
+			// allow the ".exe" suffix.
+			gotPath := strings.ToLower(cmd.Path)
+			wantPath := strings.ToLower(wantBinary)
+			if gotPath != wantPath &&
+				!strings.HasSuffix(gotPath, wantPath) &&
+				!strings.HasSuffix(gotPath, wantPath+".exe") {
 				t.Errorf("path = %q, want %q", cmd.Path, wantBinary)
 			}
 		})
