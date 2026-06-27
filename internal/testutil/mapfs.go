@@ -5,7 +5,7 @@ package testutil
 import (
 	"io/fs"
 	"os"
-	"path/filepath"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -42,7 +42,7 @@ func (m *MapFS) Stat(name string) (fs.FileInfo, error) {
 	if !ok {
 		return nil, &os.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
 	}
-	return &memFileInfo{name: filepath.Base(name), size: int64(len(f.data)), mode: f.mode, isDir: f.isDir}, nil
+	return &memFileInfo{name: path.Base(name), size: int64(len(f.data)), mode: f.mode, isDir: f.isDir}, nil
 }
 
 func (m *MapFS) ReadFile(name string) ([]byte, error) {
@@ -66,20 +66,22 @@ func (m *MapFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	return nil
 }
 
-func (m *MapFS) MkdirAll(path string, perm fs.FileMode) error {
+func (m *MapFS) MkdirAll(name string, perm fs.FileMode) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// Walk each component and create directory entries so Stat/IsDir work.
-	parts := strings.Split(filepath.Clean(path), string(filepath.Separator))
+	// MapFS keys are logical forward-slash paths, so walk components with the
+	// "path" package rather than "path/filepath" (whose separator is "\" on
+	// Windows, which would create keys that Stat("/a/b") never matches).
+	parts := strings.Split(path.Clean(name), "/")
 	cur := ""
 	for _, p := range parts {
 		if p == "" {
-			cur = string(filepath.Separator)
+			cur = "/"
 			continue
 		}
-		cur = filepath.Join(cur, p)
-		if !strings.HasPrefix(cur, string(filepath.Separator)) {
-			cur = string(filepath.Separator) + cur
+		cur = path.Join(cur, p)
+		if !strings.HasPrefix(cur, "/") {
+			cur = "/" + cur
 		}
 		if _, ok := m.files[cur]; !ok {
 			m.files[cur] = &memFile{mode: perm | fs.ModeDir, isDir: true}

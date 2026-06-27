@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -44,8 +45,12 @@ func TestOSFS_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat after chmod: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("perm after Chmod = %o, want 600", perm)
+	// Go on Windows only models the read-only bit, so os.Stat does not round-trip
+	// Unix sub-mode bits (it reports 0666); assert the exact perm on Unix only.
+	if runtime.GOOS != "windows" {
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("perm after Chmod = %o, want 600", perm)
+		}
 	}
 
 	if err := o.Remove(file); err != nil {
@@ -98,6 +103,9 @@ func TestOSFS_Errors(t *testing.T) {
 var _ FS = OSFS{}
 
 func TestOSFS_WriteFilePerm(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits are not representable on Windows (os.Stat reports 0666)")
+	}
 	dir := t.TempDir()
 	o := OSFS{}
 	file := filepath.Join(dir, "perm.txt")

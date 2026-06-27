@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/TsekNet/converge/internal/shell"
 )
 
 // waitErrCondition is a test helper whose Wait returns a fixed error. It lets
@@ -114,10 +116,18 @@ func TestResource_Wait(t *testing.T) {
 }
 
 func TestShell_Wait(t *testing.T) {
+	cmds := platformCmds()
+
 	t.Run("already met returns nil quickly", func(t *testing.T) {
-		c := Shell("true").In("bash")
+		// A command that exits 0 is immediately met. Use the platform default
+		// shell (bash on Unix, PowerShell on Windows) since hardcoding bash
+		// hangs on Windows, where /bin/bash is absent and the condition would
+		// never become met. A generous safety-net deadline bounds any hang.
+		c := Shell(cmds.exitZero).In(shell.Auto)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 		start := time.Now()
-		if err := c.Wait(context.Background()); err != nil {
+		if err := c.Wait(ctx); err != nil {
 			t.Fatalf("Wait() = %v, want nil", err)
 		}
 		if elapsed := time.Since(start); elapsed > 3*time.Second {
@@ -126,9 +136,9 @@ func TestShell_Wait(t *testing.T) {
 	})
 
 	t.Run("never met honors deadline", func(t *testing.T) {
-		// "false" never exits 0, so the condition is never met; the short
-		// deadline must unblock Wait via ctx.Err().
-		c := Shell("false").In("bash")
+		// A command that exits 1 is never met; the short deadline must unblock
+		// Wait via ctx.Err().
+		c := Shell(cmds.exitOne).In(shell.Auto)
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 		start := time.Now()
