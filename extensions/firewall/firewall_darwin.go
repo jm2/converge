@@ -135,15 +135,21 @@ func (f *Firewall) ruleState() (exists, match bool, err error) {
 
 	tag := f.commentTag()
 	want := f.pfRule()
+	count := 0
 	for _, line := range rules {
 		if !strings.Contains(line, tag) {
 			continue
 		}
 		exists = true
+		count++
 		body := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(line), tag))
-		if body == want {
-			match = true
-		}
+		match = body == want
+	}
+	// In sync only with exactly one tagged rule that matches; duplicates (e.g.
+	// out-of-band edits) are drift so Apply (filter-all-by-tag then re-add one)
+	// collapses them to the canonical rule.
+	if count > 1 {
+		match = false
 	}
 	return exists, match, nil
 }

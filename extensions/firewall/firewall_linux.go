@@ -48,12 +48,12 @@ func (f *Firewall) Check(_ context.Context) (*extensions.State, error) {
 		return checkResult(f.Name, len(matched) > 0, false)
 	}
 
-	// Want present: a name-matching rule must exist AND its decoded
-	// attributes must match the desired spec.
-	for _, rule := range matched {
-		if f.attrsMatch(decodeRule(rule.Exprs)) {
-			return &extensions.State{InSync: true}, nil
-		}
+	// Want present: in sync only when EXACTLY ONE name-matching rule exists and
+	// its decoded attributes match the desired spec. Duplicates (e.g. from
+	// out-of-band edits or an interrupted run) are treated as drift so Apply
+	// (delete-all-by-name then re-add one) collapses them to the canonical rule.
+	if len(matched) == 1 && f.attrsMatch(decodeRule(matched[0].Exprs)) {
+		return &extensions.State{InSync: true}, nil
 	}
 	action := "add"
 	if len(matched) > 0 {
