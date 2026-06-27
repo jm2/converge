@@ -189,7 +189,11 @@ func TestCommand(t *testing.T) {
 				t.Errorf("args = %v, want %v", gotArgs, tt.wantArgs)
 			}
 			wantBinary, _, _ := Resolve(tt.shell, tt.params)
-			if cmd.Path != wantBinary && !strings.HasSuffix(cmd.Path, wantBinary) {
+			// On Windows, exec.Command resolves a bare name like "pwsh" to its
+			// full path with a ".exe" suffix (e.g. ...\pwsh.exe), so accept that.
+			if cmd.Path != wantBinary &&
+				!strings.HasSuffix(cmd.Path, wantBinary) &&
+				!strings.HasSuffix(cmd.Path, wantBinary+".exe") {
 				t.Errorf("path = %q, want %q", cmd.Path, wantBinary)
 			}
 		})
