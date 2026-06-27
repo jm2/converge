@@ -11,6 +11,9 @@ import (
 	"github.com/TsekNet/converge/extensions"
 )
 
+// commandContext wraps exec.CommandContext for testability.
+var commandContext = exec.CommandContext
+
 // Check dispatches to the detected init system (currently systemd only).
 func (s *Service) Check(ctx context.Context) (*extensions.State, error) {
 	switch s.InitSystem {
@@ -66,21 +69,21 @@ func (s *Service) checkSystemd(ctx context.Context) (*extensions.State, error) {
 
 func (s *Service) applySystemd(ctx context.Context) (*extensions.Result, error) {
 	if s.State == "running" {
-		if out, err := exec.CommandContext(ctx, "systemctl", "start", s.Name).CombinedOutput(); err != nil {
+		if out, err := commandContext(ctx, "systemctl", "start", s.Name).CombinedOutput(); err != nil {
 			return nil, fmt.Errorf("systemctl start %s: %s: %w", s.Name, strings.TrimSpace(string(out)), err)
 		}
 	} else {
-		if out, err := exec.CommandContext(ctx, "systemctl", "stop", s.Name).CombinedOutput(); err != nil {
+		if out, err := commandContext(ctx, "systemctl", "stop", s.Name).CombinedOutput(); err != nil {
 			return nil, fmt.Errorf("systemctl stop %s: %s: %w", s.Name, strings.TrimSpace(string(out)), err)
 		}
 	}
 
 	if s.Enable {
-		if out, err := exec.CommandContext(ctx, "systemctl", "enable", s.Name).CombinedOutput(); err != nil {
+		if out, err := commandContext(ctx, "systemctl", "enable", s.Name).CombinedOutput(); err != nil {
 			return nil, fmt.Errorf("systemctl enable %s: %s: %w", s.Name, strings.TrimSpace(string(out)), err)
 		}
 	} else {
-		if out, err := exec.CommandContext(ctx, "systemctl", "disable", s.Name).CombinedOutput(); err != nil {
+		if out, err := commandContext(ctx, "systemctl", "disable", s.Name).CombinedOutput(); err != nil {
 			return nil, fmt.Errorf("systemctl disable %s: %s: %w", s.Name, strings.TrimSpace(string(out)), err)
 		}
 	}

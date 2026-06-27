@@ -32,6 +32,31 @@ func noCh(t *testing.T, ch <-chan struct{}, wait time.Duration) {
 	}
 }
 
+func TestShared(t *testing.T) {
+	// inotify_init1/epoll_create1 need no root, so Shared must succeed here.
+	w, err := Shared()
+	if err != nil {
+		t.Fatalf("Shared returned error: %v", err)
+	}
+	if w == nil {
+		t.Fatal("Shared returned nil watcher")
+	}
+
+	// Memoization: a second call returns the same instance.
+	w2, err := Shared()
+	if err != nil {
+		t.Fatalf("second Shared call returned error: %v", err)
+	}
+	if w != w2 {
+		t.Error("Shared did not return the memoized instance")
+	}
+
+	// The end-to-end Watch->readLoop->dispatch path is covered deterministically
+	// by TestWatchModify on a dedicated watcher; exercising it again through the
+	// process-wide singleton here added nothing but a load-sensitive timeout, so
+	// TestShared is scoped to the memoization guarantee that is unique to Shared.
+}
+
 func TestWatchModify(t *testing.T) {
 	w, err := newWatcher()
 	if err != nil {

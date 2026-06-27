@@ -4,6 +4,8 @@ package sysctl
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"testing"
 
 	"github.com/TsekNet/converge/internal/testutil"
@@ -154,5 +156,52 @@ func TestSysctl_MapFS_ValidateRejectsInvalidKey(t *testing.T) {
 	_, err = s.Apply(ctx)
 	if err == nil {
 		t.Error("Apply() should reject key with '..'")
+	}
+}
+
+// failFS embeds a MapFS but can be configured to fail WriteFile and/or
+// MkdirAll, exercising Apply's and writePersist's error paths.
+type failFS struct {
+	*testutil.MapFS
+	failWrite    bool
+	failMkdirAll bool
+}
+
+func (f *failFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
+	if f.failWrite {
+		return errors.New("synthetic write failure")
+	}
+	return f.MapFS.WriteFile(name, data, perm)
+}
+
+func (f *failFS) MkdirAll(path string, perm fs.FileMode) error {
+	if f.failMkdirAll {
+		return errors.New("synthetic mkdir failure")
+	}
+	return f.MapFS.MkdirAll(path, perm)
+}
+
+func TestSysctl_Apply_WriteError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	ffs := &failFS{MapFS: testutil.NewMapFS(), failWrite: true}
+	s := New("net.ipv4.ip_forward", Opts{Value: "1", FS: ffs})
+
+	if _, err := s.Apply(ctx); err == nil {
+		t.Error("Apply() should error when WriteFile fails")
+	}
+}
+
+func TestSysctl_Apply_PersistError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// MkdirAll for /etc/sysctl.d fails while the /proc/sys write succeeds.
+	ffs := &failFS{MapFS: testutil.NewMapFS(), failMkdirAll: true}
+	s := New("net.ipv4.ip_forward", Opts{Value: "1", Persist: true, FS: ffs})
+
+	if _, err := s.Apply(ctx); err == nil {
+		t.Error("Apply() should error when persist (MkdirAll) fails")
 	}
 }
