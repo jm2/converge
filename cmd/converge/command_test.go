@@ -20,7 +20,6 @@ func captureStdout(t *testing.T, fn func()) string {
 	}
 	orig := os.Stdout
 	os.Stdout = w
-	defer func() { os.Stdout = orig }()
 
 	done := make(chan string, 1)
 	go func() {
@@ -29,8 +28,17 @@ func captureStdout(t *testing.T, fn func()) string {
 		done <- buf.String()
 	}()
 
+	// Restore stdout and tear down the pipe in all paths, including a panic in
+	// fn: closing w unblocks the copy goroutine (the buffered channel lets it
+	// finish with no reader) and closing r releases the read-end fd.
+	defer func() {
+		os.Stdout = orig
+		_ = w.Close()
+		_ = r.Close()
+	}()
+
 	fn()
-	_ = w.Close()
+	_ = w.Close() // flush EOF so the copy goroutine completes for the read below
 	return <-done
 }
 

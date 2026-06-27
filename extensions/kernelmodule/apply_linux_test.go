@@ -127,7 +127,10 @@ func TestAddToBlacklist_RealFile(t *testing.T) {
 	if err := addToBlacklist("cramfs"); err != nil {
 		t.Fatalf("addToBlacklist() second call error: %v", err)
 	}
-	data, _ = os.ReadFile(path)
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read blacklist: %v", err)
+	}
 	if got := strings.Count(string(data), "blacklist cramfs"); got != 1 {
 		t.Errorf("expected exactly 1 entry, got %d in %q", got, data)
 	}
@@ -136,7 +139,10 @@ func TestAddToBlacklist_RealFile(t *testing.T) {
 	if err := addToBlacklist("freevxfs"); err != nil {
 		t.Fatalf("addToBlacklist() error: %v", err)
 	}
-	data, _ = os.ReadFile(path)
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read blacklist: %v", err)
+	}
 	if !strings.Contains(string(data), "blacklist freevxfs") {
 		t.Errorf("blacklist file missing second entry, got %q", data)
 	}
