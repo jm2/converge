@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,7 +9,7 @@ import (
 )
 
 func TestCoalescer_CollapsesBurstEvents(t *testing.T) {
-	out := make(chan string, 10)
+	out := make(chan resourceEvent, 10)
 	c := newCoalescer(100*time.Millisecond, out)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -40,7 +39,7 @@ func TestCoalescer_CollapsesBurstEvents(t *testing.T) {
 }
 
 func TestCoalescer_DifferentResourcesNotCoalesced(t *testing.T) {
-	out := make(chan string, 10)
+	out := make(chan resourceEvent, 10)
 	c := newCoalescer(50*time.Millisecond, out)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -53,8 +52,8 @@ func TestCoalescer_DifferentResourcesNotCoalesced(t *testing.T) {
 	cancel()
 
 	var ids []string
-	for id := range out {
-		ids = append(ids, id)
+	for ev := range out {
+		ids = append(ids, ev.id)
 		if len(out) == 0 {
 			break
 		}
@@ -65,28 +64,76 @@ func TestCoalescer_DifferentResourcesNotCoalesced(t *testing.T) {
 	}
 }
 
+// TestCoalescer_PreservesStrongestKind verifies that when a watch event and a
+// poll event coalesce into one notification, the emitted kind is the stronger
+// (watch) signal. This guards against a real watch event being downgraded to a
+// poll, which shouldProcess would suppress during a backoff window.
+func TestCoalescer_PreservesStrongestKind(t *testing.T) {
+	out := make(chan resourceEvent, 10)
+	c := newCoalescer(50*time.Millisecond, out)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.run(ctx)
+
+	// Poll arrives first, then a watch event within the same window.
+	c.submit(extensions.Event{ResourceID: "file:/etc/test", Kind: extensions.EventPoll})
+	c.submit(extensions.Event{ResourceID: "file:/etc/test", Kind: extensions.EventWatch})
+
+	select {
+	case ev := <-out:
+		if ev.id != "file:/etc/test" {
+			t.Fatalf("got id %q, want file:/etc/test", ev.id)
+		}
+		if ev.kind != extensions.EventWatch {
+			t.Errorf("coalesced kind = %v, want EventWatch (strongest signal)", ev.kind)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for coalesced event")
+	}
+}
+
 func TestRateLimiter_ThrottlesEvents(t *testing.T) {
 	// Rate limit: 2 per second, burst 1.
 	rl := newResourceRateLimiter(2, 1)
 	id := "file:/etc/test"
 
-	var allowed atomic.Int32
-	start := time.Now()
-
-	// Try 10 events in 200ms. With rate=2/s and burst=1, we should get ~1-2.
+	allowed := 0
 	for i := 0; i < 10; i++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-		if rl.allow(ctx, id) {
-			allowed.Add(1)
+		if ok, _ := rl.reserve(id); ok {
+			allowed++
 		}
-		cancel()
 	}
 
-	elapsed := time.Since(start)
-	got := int(allowed.Load())
+	// With burst 1 and a non-blocking reserve, only the burst token is granted
+	// immediately; the rest are throttled.
+	if allowed != 1 {
+		t.Errorf("allowed %d events, want 1 (burst 1, non-blocking)", allowed)
+	}
+}
 
-	// Should allow 1-3 events in ~200ms at 2/s rate.
-	if got < 1 || got > 5 {
-		t.Errorf("allowed %d events in %v, expected 1-5 at rate 2/s", got, elapsed)
+// TestRateLimiter_ReserveIsNonBlocking verifies reserve returns immediately
+// with a positive delay when throttled, instead of blocking the caller. This
+// is what keeps the single consumer loop from stalling on one throttled
+// resource.
+func TestRateLimiter_ReserveIsNonBlocking(t *testing.T) {
+	rl := newResourceRateLimiter(0.1, 1) // 1 per 10s, burst 1
+	id := "file:/etc/test"
+
+	if ok, delay := rl.reserve(id); !ok || delay != 0 {
+		t.Fatalf("first reserve = (%v, %v), want (true, 0)", ok, delay)
+	}
+
+	start := time.Now()
+	ok, delay := rl.reserve(id)
+	elapsed := time.Since(start)
+
+	if ok {
+		t.Error("second reserve returned ok, want throttled")
+	}
+	if delay <= 0 {
+		t.Errorf("throttled delay = %v, want > 0", delay)
+	}
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("reserve blocked for %v, want non-blocking", elapsed)
 	}
 }

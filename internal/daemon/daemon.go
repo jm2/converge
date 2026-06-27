@@ -40,14 +40,15 @@ type Options struct {
 
 // Daemon watches resources for drift and re-converges them.
 type Daemon struct {
-	graph         *graph.Graph
-	printer       output.Printer
-	opts          Options
-	retries       *retryManager
-	initErr       error         // error from initial convergence
-	processing    sync.Map      // tracks in-progress resource IDs
-	conditionsMet sync.Map      // resourceID -> bool; true once condition is satisfied
-	lastChange    atomic.Int64  // unix nano timestamp of last Apply that changed something
+	graph           *graph.Graph
+	printer         output.Printer
+	opts            Options
+	retries         *retryManager
+	initErr         error        // error from initial convergence
+	processing      sync.Map     // tracks in-progress resource IDs
+	conditionsMet   sync.Map     // resourceID -> bool; true once condition is satisfied
+	deferredPending sync.Map     // resourceID -> bool; a rate-limited re-enqueue is scheduled
+	lastChange      atomic.Int64 // unix nano timestamp of last Apply that changed something
 }
 
 // New creates a daemon for the given resource graph.
@@ -99,7 +100,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		Parallel:        d.opts.Parallel,
 		SuppressSummary: d.opts.ConvergedTimeout == 0,
 	}
-	code, err := engine.RunApplyDAG(d.graph, d.printer, engineOpts)
+	code, err := engine.RunApplyDAG(ctx, d.graph, d.printer, engineOpts)
 	if err != nil {
 		deck.Errorf("initial convergence failed (exit %d): %v", code, err)
 		d.initErr = err
@@ -119,28 +120,31 @@ func (d *Daemon) Run(ctx context.Context) error {
 	wg := d.startWatchers(watchCtx, rawEvents)
 
 	// Phase 3: split events into coalesced (watch/poll) and direct (retry).
-	coalescedIDs := make(chan string, 256)
-	retryIDs := make(chan string, 64)
+	// Each channel carries the authoritative EventKind alongside the id, so the
+	// kind is never reconstructed from shared last-write-wins state.
+	coalescedEvents := make(chan resourceEvent, 256)
+	retryEvents := make(chan resourceEvent, 64)
 	window := d.opts.CoalesceWindow
 	if window == 0 {
 		window = defaultCoalesceWindow
 	}
-	coalescer := newCoalescer(window, coalescedIDs)
+	coalescer := newCoalescer(window, coalescedEvents)
 	go coalescer.run(watchCtx)
 
-	// Bridge: raw events -> coalescer or direct retry channel.
-	eventMeta := &sync.Map{} // resourceID -> last extensions.EventKind
+	// Bridge: raw events -> coalescer or direct retry channel. Retries use a
+	// blocking (ctx-guarded) send so a scheduled retry is never silently
+	// dropped; this is the reliable wakeup for resources stuck Converging.
 	go func() {
 		for {
 			select {
 			case <-watchCtx.Done():
 				return
 			case evt := <-rawEvents:
-				eventMeta.Store(evt.ResourceID, evt.Kind)
 				if evt.Kind == extensions.EventRetry {
 					select {
-					case retryIDs <- evt.ResourceID:
-					default:
+					case retryEvents <- resourceEvent{id: evt.ResourceID, kind: evt.Kind}:
+					case <-watchCtx.Done():
+						return
 					}
 				} else {
 					coalescer.submit(evt)
@@ -160,7 +164,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	// Phase 4: rate-limited event loop reads from both channels.
 	rl := newResourceRateLimiter(defaultRatePerResource, defaultRateBurst)
-	d.processLoop(loopCtx, coalescedIDs, retryIDs, eventMeta, rl, rawEvents)
+	d.processLoop(loopCtx, coalescedEvents, retryEvents, rl, rawEvents)
 
 	if convergedCancel != nil {
 		convergedCancel()
@@ -291,22 +295,36 @@ func (d *Daemon) poll(ctx context.Context, ext extensions.Extension, interval ti
 	}
 }
 
-// processLoop reads coalesced and retry resource IDs, applies rate limiting,
-// and converges each resource in its own goroutine.
-func (d *Daemon) processLoop(ctx context.Context, coalescedIDs, retryIDs <-chan string, eventMeta *sync.Map, rl *resourceRateLimiter, rawEvents chan extensions.Event) {
+// processLoop reads coalesced and retry resource events, applies rate
+// limiting, and converges each resource in its own goroutine. The loop itself
+// never blocks on rate limiting: throttled events are re-enqueued onto the
+// internal deferred channel by timer goroutines, so one heavily throttled
+// resource cannot stall convergence for every other resource.
+func (d *Daemon) processLoop(ctx context.Context, coalescedEvents, retryEvents <-chan resourceEvent, rl *resourceRateLimiter, rawEvents chan extensions.Event) {
+	// deferred carries rate-limited events re-enqueued after their limiter
+	// delay. Timer goroutines block (ctx-guarded) on sending here, so a
+	// throttled drift event is deferred rather than dropped.
+	deferred := make(chan resourceEvent, 256)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case id := <-coalescedIDs:
-			d.handleResourceEvent(ctx, id, eventMeta, rl, rawEvents)
-		case id := <-retryIDs:
-			d.handleResourceEvent(ctx, id, eventMeta, rl, rawEvents)
+		case ev := <-coalescedEvents:
+			d.handleResourceEvent(ctx, ev, rl, rawEvents, deferred)
+		case ev := <-retryEvents:
+			d.handleResourceEvent(ctx, ev, rl, rawEvents, deferred)
+		case ev := <-deferred:
+			// Clear the dedup marker before handling so a fresh throttle can
+			// schedule another re-enqueue if needed.
+			d.deferredPending.Delete(ev.id)
+			d.handleResourceEvent(ctx, ev, rl, rawEvents, deferred)
 		}
 	}
 }
 
-func (d *Daemon) handleResourceEvent(ctx context.Context, id string, eventMeta *sync.Map, rl *resourceRateLimiter, rawEvents chan extensions.Event) {
+func (d *Daemon) handleResourceEvent(ctx context.Context, ev resourceEvent, rl *resourceRateLimiter, rawEvents chan extensions.Event, deferred chan<- resourceEvent) {
+	id, kind := ev.id, ev.kind
+
 	node := d.graph.Node(id)
 	if node == nil {
 		return
@@ -317,18 +335,27 @@ func (d *Daemon) handleResourceEvent(ctx context.Context, id string, eventMeta *
 		return
 	}
 
-	kind := extensions.EventWatch
-	if v, ok := eventMeta.Load(id); ok {
-		kind = v.(extensions.EventKind)
-	}
-
 	if !d.retries.shouldProcess(id, kind) {
 		return
 	}
 
-	// Rate limit watch/poll events, not retries (retries have their own backoff).
-	if kind != extensions.EventRetry && !rl.allow(ctx, id) {
+	// If a convergence for this resource is already in flight, it will pick up
+	// the current drift, so drop this event. Only this single loop goroutine
+	// stores into processing, so a Load peek here is race-free against the
+	// LoadOrStore below.
+	if _, busy := d.processing.Load(id); busy {
 		return
+	}
+
+	// Rate limit watch/poll events, not retries (retries have their own
+	// backoff). Never block the loop: if throttled, re-enqueue the event after
+	// the limiter's delay so the drift is processed later instead of dropped.
+	if kind != extensions.EventRetry {
+		ok, delay := rl.reserve(id)
+		if !ok {
+			d.deferEvent(ctx, ev, delay, deferred)
+			return
+		}
 	}
 
 	if _, loaded := d.processing.LoadOrStore(id, true); loaded {
@@ -340,6 +367,35 @@ func (d *Daemon) handleResourceEvent(ctx context.Context, id string, eventMeta *
 		defer d.processing.Delete(id)
 		d.convergeResource(ctx, ext, id, rawEvents)
 	}(node.Ext, id)
+}
+
+// deferEvent re-enqueues a rate-limited event after delay. A single re-enqueue
+// is kept pending per resource (deferredPending) so a steadily-throttled
+// resource cannot spawn an unbounded number of timer goroutines, while still
+// guaranteeing its drift is eventually processed rather than dropped. The
+// timer goroutine performs a blocking, ctx-guarded send, so the consumer loop
+// stays responsive and shutdown is clean.
+func (d *Daemon) deferEvent(ctx context.Context, ev resourceEvent, delay time.Duration, deferred chan<- resourceEvent) {
+	if _, pending := d.deferredPending.LoadOrStore(ev.id, true); pending {
+		return // a re-enqueue is already scheduled for this resource
+	}
+	if delay <= 0 {
+		delay = time.Millisecond
+	}
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			select {
+			case deferred <- ev:
+			case <-ctx.Done():
+				d.deferredPending.Delete(ev.id)
+			}
+		case <-ctx.Done():
+			d.deferredPending.Delete(ev.id)
+		}
+	}()
 }
 
 // convergeResource runs Check/Apply with retry/backoff logic.
@@ -418,6 +474,9 @@ func (d *Daemon) scheduleRetry(ctx context.Context, id string, err error, events
 		defer timer.Stop()
 		select {
 		case <-timer.C:
+			// Blocking (ctx-guarded) send: a dropped retry can leave a
+			// resource stuck Converging with no further wakeup, so deliver it
+			// rather than dropping on a full channel.
 			select {
 			case events <- extensions.Event{
 				ResourceID: id,
@@ -425,7 +484,7 @@ func (d *Daemon) scheduleRetry(ctx context.Context, id string, err error, events
 				Detail:     "scheduled retry",
 				Time:       time.Now(),
 			}:
-			default:
+			case <-ctx.Done():
 			}
 		case <-ctx.Done():
 			return

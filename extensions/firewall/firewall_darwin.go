@@ -23,17 +23,47 @@ const (
 var pfAction = map[string]string{"block": "block", "allow": "pass"}
 var pfDirection = map[string]string{"outbound": "out", "inbound": "in"}
 
-// Check determines whether the pf rule exists in the converge anchor file.
+// Check determines whether the pf rule exists in the converge anchor file with
+// the desired attributes. Matching the comment tag alone is insufficient: a
+// rule flipped block->allow or re-pointed to another port/source keeps its tag,
+// so Check compares the rule body against the freshly rendered pfRule(). Any
+// mismatch is reported as drift so Apply (filter-by-tag then re-add) corrects it.
 func (f *Firewall) Check(_ context.Context) (*extensions.State, error) {
-	exists, err := f.ruleExists()
+	if err := f.validErr(); err != nil {
+		return nil, err
+	}
+	exists, match, err := f.ruleState()
 	if err != nil {
 		return nil, fmt.Errorf("check firewall rule %q: %w", f.Name, err)
 	}
-	return checkResult(f.Name, exists, f.State != "absent")
+
+	if f.State == "absent" {
+		return checkResult(f.Name, exists, false)
+	}
+
+	if exists && match {
+		return &extensions.State{InSync: true}, nil
+	}
+	action := "add"
+	if exists {
+		action = "modify"
+	}
+	return &extensions.State{
+		InSync: false,
+		Changes: []extensions.Change{{
+			Property: "rule",
+			From:     boolToState(exists),
+			To:       "present",
+			Action:   action,
+		}},
+	}, nil
 }
 
 // Apply creates or removes the pf rule, then reloads pf.
 func (f *Firewall) Apply(_ context.Context) (*extensions.Result, error) {
+	if err := f.validErr(); err != nil {
+		return nil, err
+	}
 	if f.State == "absent" {
 		return f.removeRule()
 	}
@@ -90,22 +120,38 @@ func (f *Firewall) removeRule() (*extensions.Result, error) {
 	return resultChanged("removed")
 }
 
-func (f *Firewall) ruleExists() (bool, error) {
+// ruleState reports whether a tagged rule for this resource exists in the anchor
+// file and, if so, whether its body matches the desired rule. A rule "exists" if
+// any line carries the comment tag; it "matches" only if the rule text before the
+// tag equals the freshly rendered pfRule().
+func (f *Firewall) ruleState() (exists, match bool, err error) {
 	rules, err := readAnchorFile()
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil
+			return false, false, nil
 		}
-		return false, err
+		return false, false, err
 	}
 
 	tag := f.commentTag()
+	want := f.pfRule()
+	count := 0
 	for _, line := range rules {
-		if strings.Contains(line, tag) {
-			return true, nil
+		if !strings.Contains(line, tag) {
+			continue
 		}
+		exists = true
+		count++
+		body := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(line), tag))
+		match = body == want
 	}
-	return false, nil
+	// In sync only with exactly one tagged rule that matches; duplicates (e.g.
+	// out-of-band edits) are drift so Apply (filter-all-by-tag then re-add one)
+	// collapses them to the canonical rule.
+	if count > 1 {
+		match = false
+	}
+	return exists, match, nil
 }
 
 // filterRules returns lines that do not contain the given tag.

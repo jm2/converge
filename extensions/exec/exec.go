@@ -23,14 +23,21 @@ type Opts struct {
 	Retries     int
 	RetryDelay  time.Duration
 	Critical    bool
+
+	// Idempotency guards. With none set, Check always reports out-of-sync and
+	// the command runs on every convergence. A guard short-circuits Check to
+	// in-sync so the command is skipped.
+	Creates string // skip if this path exists
+	OnlyIf  string // skip unless this command succeeds (exit 0)
+	Unless  string // skip if this command succeeds (exit 0)
 }
 
-// Exec runs an arbitrary command. For state detection, use condition.Shell
-// on Meta.Condition instead of guards on the Exec resource itself.
+// Exec runs an arbitrary command. Use the Creates/OnlyIf/Unless guards to make
+// it idempotent; without a guard it runs on every convergence.
 //
 // When Shell is set, Command is wrapped: the shell binary is invoked with
 // default flags (or ShellParams) followed by the command. Command can be
-// multi-line.
+// multi-line. Shell and Args are mutually exclusive.
 type Exec struct {
 	Name        string
 	Command     string
@@ -42,6 +49,10 @@ type Exec struct {
 	Retries     int
 	RetryDelay  time.Duration
 	Critical    bool
+
+	Creates string
+	OnlyIf  string
+	Unless  string
 }
 
 func New(name string, opts Opts) *Exec {
@@ -56,6 +67,9 @@ func New(name string, opts Opts) *Exec {
 		Retries:     opts.Retries,
 		RetryDelay:  opts.RetryDelay,
 		Critical:    opts.Critical,
+		Creates:     opts.Creates,
+		OnlyIf:      opts.OnlyIf,
+		Unless:      opts.Unless,
 	}
 }
 
@@ -80,9 +94,55 @@ func (e *Exec) setEnv(cmd *osexec.Cmd) {
 	}
 }
 
-// Check for Exec always returns not-in-sync (the command needs to run).
-// Use condition.Shell on Meta.Condition for state detection.
-func (e *Exec) Check(_ context.Context) (*extensions.State, error) {
+// validate rejects mutually exclusive configuration. Shell wraps Command in a
+// shell invocation, leaving no place for Args, so the two cannot be combined.
+func (e *Exec) validate() error {
+	if e.Shell != "" && len(e.Args) > 0 {
+		return fmt.Errorf("exec %s: Shell and Args are mutually exclusive", e.Name)
+	}
+	return nil
+}
+
+// runGuard executes a guard command and returns its exit status as an error
+// (nil on exit 0). Guard commands always run through a shell since they are
+// command strings, defaulting to the auto shell when none is configured.
+func (e *Exec) runGuard(ctx context.Context, command string) error {
+	sh := e.Shell
+	if sh == "" {
+		sh = shell.Auto
+	}
+	cmd := shell.Command(ctx, sh, command, e.ShellParams)
+	e.setEnv(cmd)
+	return cmd.Run()
+}
+
+// Check evaluates the idempotency guards. With no guard set it always reports
+// out-of-sync so the command runs. Otherwise a guard can short-circuit to
+// in-sync: Creates when the path exists, OnlyIf when its command fails, and
+// Unless when its command succeeds.
+func (e *Exec) Check(ctx context.Context) (*extensions.State, error) {
+	if err := e.validate(); err != nil {
+		return nil, err
+	}
+
+	inSync := &extensions.State{InSync: true}
+
+	if e.Creates != "" {
+		if _, err := os.Stat(e.Creates); err == nil {
+			return inSync, nil
+		}
+	}
+	if e.OnlyIf != "" {
+		if err := e.runGuard(ctx, e.OnlyIf); err != nil {
+			return inSync, nil
+		}
+	}
+	if e.Unless != "" {
+		if err := e.runGuard(ctx, e.Unless); err == nil {
+			return inSync, nil
+		}
+	}
+
 	return &extensions.State{
 		InSync: false,
 		Changes: []extensions.Change{
@@ -91,7 +151,25 @@ func (e *Exec) Check(_ context.Context) (*extensions.State, error) {
 	}, nil
 }
 
+// maxErrOutput caps how much command output is embedded in an Apply error, to
+// avoid leaking large or sensitive output into logs and JSON.
+const maxErrOutput = 500
+
+// tailOutput returns the trailing maxErrOutput bytes of command output for
+// inclusion in an error message.
+func tailOutput(b []byte) string {
+	s := strings.TrimSpace(string(b))
+	if len(s) > maxErrOutput {
+		return "..." + s[len(s)-maxErrOutput:]
+	}
+	return s
+}
+
 func (e *Exec) Apply(ctx context.Context) (*extensions.Result, error) {
+	if err := e.validate(); err != nil {
+		return nil, err
+	}
+
 	retries := e.Retries
 	if retries <= 0 {
 		retries = 1
@@ -115,7 +193,8 @@ func (e *Exec) Apply(ctx context.Context) (*extensions.Result, error) {
 			}, nil
 		}
 
-		lastErr = fmt.Errorf("%s (attempt %d/%d): %s: %w", e.Command, attempt+1, retries, strings.TrimSpace(string(output)), err)
+		// Do not embed the raw command (may contain secrets); truncate output.
+		lastErr = fmt.Errorf("command failed (attempt %d/%d): %s: %w", attempt+1, retries, tailOutput(output), err)
 		if attempt < retries-1 {
 			time.Sleep(delay)
 		}

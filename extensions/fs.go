@@ -15,6 +15,11 @@ type FS interface {
 	MkdirAll(path string, perm fs.FileMode) error
 	Chmod(name string, mode fs.FileMode) error
 	Remove(name string) error
+	// Chown sets ownership. A uid or gid of -1 leaves that field unchanged.
+	Chown(name string, uid, gid int) error
+	// Owner returns the current uid/gid of name. On platforms without POSIX
+	// ownership it returns an error; callers gate on ownershipSupported.
+	Owner(name string) (uid, gid int, err error)
 }
 
 // OSFS delegates all operations to the os package.
@@ -28,6 +33,9 @@ func (OSFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 func (OSFS) MkdirAll(path string, perm fs.FileMode) error { return os.MkdirAll(path, perm) }
 func (OSFS) Chmod(name string, mode fs.FileMode) error    { return os.Chmod(name, mode) }
 func (OSFS) Remove(name string) error                     { return os.Remove(name) }
+func (OSFS) Chown(name string, uid, gid int) error        { return os.Chown(name, uid, gid) }
+
+// OSFS.Owner is implemented per-platform (fs_unix.go / fs_windows.go).
 
 // RealFS returns OSFS if fsys is nil, otherwise returns fsys.
 func RealFS(fsys FS) FS {

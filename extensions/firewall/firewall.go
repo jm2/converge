@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/TsekNet/converge/extensions"
 )
@@ -34,6 +36,12 @@ type Firewall struct {
 	Dest      string // Optional destination IP or CIDR. Empty = any.
 	State     string // "present" (default) or "absent".
 	Critical  bool
+
+	// valErr holds a validation failure detected at construction. It is
+	// surfaced as an error from Check/Apply rather than a panic, so one
+	// malformed rule cannot crash the whole run (the engine accumulates and
+	// reports it like any other resource failure).
+	valErr error
 }
 
 // validName must never allow '|' or '=' to prevent Windows firewall rule injection.
@@ -60,11 +68,17 @@ func New(name string, opts Opts) *Firewall {
 		State:     state,
 		Critical:  opts.Critical,
 	}
-	if err := f.Validate(); err != nil {
-		panic(fmt.Sprintf("converge: invalid Firewall: %v", err))
-	}
+	// Validation failures are recorded, not panicked: invalid input must be
+	// reported through the normal Check/Apply error path so it cannot abort an
+	// entire converge run (this mirrors the DSL's accumulate-errors contract).
+	f.valErr = f.Validate()
 	return f
 }
+
+// validErr returns the construction-time validation error, if any. Platform
+// Check/Apply implementations must call this first so a malformed rule fails
+// cleanly instead of attempting (and mis-reporting) enforcement.
+func (f *Firewall) validErr() error { return f.valErr }
 
 // Validate checks all fields for correctness and rejects values that
 // could cause rule injection or produce silently broken rules.
@@ -116,6 +130,41 @@ func validateAddr(addr string) error {
 		return nil
 	}
 	return fmt.Errorf("must be a valid IPv4 address or CIDR, got %q", addr)
+}
+
+// normalizeIPv4 canonicalizes an IPv4 address or CIDR into "ip/prefix" form so
+// values can be compared regardless of notation. The Windows firewall API may
+// return an address as a bare IP, "ip/prefixlen", or "ip/dotted-mask", while
+// converge stores them as bare IPs or "ip/prefixlen". A bare IP normalizes to
+// "/32". Inputs that are not a single IPv4 address/CIDR (lists, ranges,
+// keywords like "*") are returned trimmed so callers fall back to exact compare.
+func normalizeIPv4(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+	ipPart, maskPart, hasMask := strings.Cut(addr, "/")
+	ip := net.ParseIP(ipPart)
+	if ip == nil || ip.To4() == nil {
+		return addr
+	}
+	prefix := 32
+	if hasMask {
+		if pl, err := strconv.Atoi(maskPart); err == nil {
+			prefix = pl
+		} else if m := net.ParseIP(maskPart); m != nil && m.To4() != nil {
+			prefix, _ = net.IPMask(m.To4()).Size()
+		} else {
+			return addr
+		}
+	}
+	return fmt.Sprintf("%s/%d", ip.To4().String(), prefix)
+}
+
+// addrEqual reports whether two IPv4 address/CIDR specs are equivalent,
+// tolerating notation differences (bare IP vs /32, prefixlen vs dotted mask).
+func addrEqual(a, b string) bool {
+	return normalizeIPv4(a) == normalizeIPv4(b)
 }
 
 // checkResult builds a State from whether the rule exists and whether we want it.

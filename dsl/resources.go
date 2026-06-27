@@ -33,6 +33,7 @@ func newFileExtension(path string, opts FileOpts) extensions.Extension {
 		BlockComment: opts.BlockComment,
 		State:        state,
 		Critical:     opts.Critical,
+		Sensitive:    opts.Sensitive,
 	})
 }
 
@@ -65,6 +66,9 @@ func newExecExtension(name string, opts ExecOpts) extensions.Extension {
 		Retries:     opts.Retries,
 		RetryDelay:  opts.RetryDelay,
 		Critical:    opts.Critical,
+		Creates:     opts.Creates,
+		OnlyIf:      opts.OnlyIf,
+		Unless:      opts.Unless,
 	})
 }
 
@@ -134,4 +138,3 @@ func newCronExtension(name string, opts CronOpts) extensions.Extension {
 		Critical: opts.Critical,
 	})
 }
-

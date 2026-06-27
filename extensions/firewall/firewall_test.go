@@ -1,6 +1,7 @@
 package firewall
 
 import (
+	"context"
 	"testing"
 
 	"github.com/TsekNet/converge/extensions"
@@ -144,7 +145,10 @@ func TestFirewall_Validate(t *testing.T) {
 	}
 }
 
-func TestFirewall_New_PanicsOnInvalid(t *testing.T) {
+// TestFirewall_New_DefersInvalidToCheck verifies invalid input does NOT panic
+// (which would crash the whole run); it is reported as an error from Check/Apply
+// so the engine can accumulate it like any other resource failure.
+func TestFirewall_New_DefersInvalidToCheck(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -163,11 +167,17 @@ func TestFirewall_New_PanicsOnInvalid(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			defer func() {
-				if r := recover(); r == nil {
-					t.Error("New() should panic on invalid input")
+				if r := recover(); r != nil {
+					t.Fatalf("New() must not panic on invalid input, got panic: %v", r)
 				}
 			}()
-			New(tt.fwName, Opts{Port: tt.port, Protocol: tt.protocol, Direction: tt.direction, Action: tt.action})
+			f := New(tt.fwName, Opts{Port: tt.port, Protocol: tt.protocol, Direction: tt.direction, Action: tt.action})
+			if _, err := f.Check(context.Background()); err == nil {
+				t.Error("Check() must return an error for an invalid firewall rule")
+			}
+			if _, err := f.Apply(context.Background()); err == nil {
+				t.Error("Apply() must return an error for an invalid firewall rule")
+			}
 		})
 	}
 }
@@ -232,6 +242,38 @@ func TestValidateAddr(t *testing.T) {
 			err := validateAddr(tt.addr)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("validateAddr(%q) error = %v, wantErr %v", tt.addr, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestAddrEqual(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		a    string
+		b    string
+		want bool
+	}{
+		{"identical bare IP", "10.0.0.1", "10.0.0.1", true},
+		{"bare IP equals /32", "10.0.0.1", "10.0.0.1/32", true},
+		{"bare IP equals dotted /32 mask", "10.0.0.1", "10.0.0.1/255.255.255.255", true},
+		{"prefixlen equals dotted mask", "10.0.0.0/24", "10.0.0.0/255.255.255.0", true},
+		{"different IP", "10.0.0.1", "10.0.0.2", false},
+		{"different prefix", "10.0.0.0/8", "10.0.0.0/16", false},
+		{"both empty", "", "", true},
+		{"empty vs set", "", "10.0.0.1", false},
+		{"whitespace tolerated", " 10.0.0.1 ", "10.0.0.1", true},
+		{"non-ip falls back to exact", "LocalSubnet", "LocalSubnet", true},
+		{"non-ip mismatch", "LocalSubnet", "*", false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := addrEqual(tt.a, tt.b); got != tt.want {
+				t.Errorf("addrEqual(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
 			}
 		})
 	}

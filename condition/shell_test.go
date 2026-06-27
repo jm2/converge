@@ -3,7 +3,28 @@ package condition
 import (
 	"context"
 	"testing"
+	"time"
 )
+
+// TestShell_Met_Timeout verifies a blocking command cannot hang Met()
+// indefinitely: shellTimeout bounds it so the daemon (which evaluates conditions
+// synchronously at startup) cannot be wedged by one slow command.
+func TestShell_Met_Timeout(t *testing.T) {
+	orig := shellTimeout
+	shellTimeout = 200 * time.Millisecond
+	defer func() { shellTimeout = orig }()
+
+	start := time.Now()
+	met, _ := Shell("sleep 5").Met(context.Background())
+	elapsed := time.Since(start)
+
+	if met {
+		t.Error("Met() should be false when the command is killed by the timeout")
+	}
+	if elapsed > 3*time.Second {
+		t.Errorf("Met() took %v; shellTimeout should have bounded it to ~200ms", elapsed)
+	}
+}
 
 func TestShell_Met_ExitCode(t *testing.T) {
 	ctx := context.Background()
@@ -61,6 +82,60 @@ func TestShell_Met_OutputMatch(t *testing.T) {
 	}
 }
 
+func TestShell_Met_MatchEmpty(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty output asserted via Match(\"\")", func(t *testing.T) {
+		// printf with no args produces no output; Match("") must assert that.
+		c := Shell(`printf ''`).In("bash").Match("")
+		met, err := c.Met(ctx)
+		if err != nil {
+			t.Fatalf("Met() error = %v", err)
+		}
+		if !met {
+			t.Error("Match(\"\") should be met when output is empty")
+		}
+	})
+
+	t.Run("non-empty output fails Match(\"\")", func(t *testing.T) {
+		c := Shell("echo -n data").In("bash").Match("")
+		met, err := c.Met(ctx)
+		if err != nil {
+			t.Fatalf("Met() error = %v", err)
+		}
+		if met {
+			t.Error("Match(\"\") should not be met when output is non-empty")
+		}
+	})
+
+	t.Run("without Match, exit code governs", func(t *testing.T) {
+		// No Match call: empty output but exit 0 is still met.
+		c := Shell(`printf ''`).In("bash")
+		met, err := c.Met(ctx)
+		if err != nil {
+			t.Fatalf("Met() error = %v", err)
+		}
+		if !met {
+			t.Error("exit 0 without Match should be met regardless of output")
+		}
+	})
+}
+
+func TestShell_Met_MatchTrimsBothSides(t *testing.T) {
+	ctx := context.Background()
+
+	// Expected value carries surrounding whitespace; it must be trimmed too,
+	// so it still matches the (trimmed) command output.
+	c := Shell("echo hello").In("bash").Match("  hello\n")
+	met, err := c.Met(ctx)
+	if err != nil {
+		t.Fatalf("Met() error = %v", err)
+	}
+	if !met {
+		t.Error("Match should trim both expected and actual before comparing")
+	}
+}
+
 func TestShell_String(t *testing.T) {
 	tests := []struct {
 		name string
@@ -68,6 +143,7 @@ func TestShell_String(t *testing.T) {
 		want string
 	}{
 		{"with match", Shell("echo hello").In("bash").Match("hello"), `shell bash: echo hello == "hello"`},
+		{"empty match", Shell("echo hello").In("bash").Match(""), `shell bash: echo hello == ""`},
 		{"no match", Shell("pgrep nginx").In("bash"), "shell bash: pgrep nginx"},
 		{"auto shell", Shell("pgrep nginx"), "shell auto: pgrep nginx"},
 	}

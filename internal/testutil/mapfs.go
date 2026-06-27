@@ -23,6 +23,8 @@ type memFile struct {
 	data  []byte
 	mode  fs.FileMode
 	isDir bool
+	uid   int
+	gid   int
 }
 
 // Compile-time check.
@@ -105,6 +107,41 @@ func (m *MapFS) Remove(name string) error {
 	}
 	delete(m.files, name)
 	return nil
+}
+
+func (m *MapFS) Chown(name string, uid, gid int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	f, ok := m.files[name]
+	if !ok {
+		return &os.PathError{Op: "chown", Path: name, Err: fs.ErrNotExist}
+	}
+	if uid >= 0 {
+		f.uid = uid
+	}
+	if gid >= 0 {
+		f.gid = gid
+	}
+	return nil
+}
+
+func (m *MapFS) Owner(name string) (uid, gid int, err error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	f, ok := m.files[name]
+	if !ok {
+		return 0, 0, &os.PathError{Op: "owner", Path: name, Err: fs.ErrNotExist}
+	}
+	return f.uid, f.gid, nil
+}
+
+// SetOwner seeds ownership on an existing file, for test setup.
+func (m *MapFS) SetOwner(name string, uid, gid int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if f, ok := m.files[name]; ok {
+		f.uid, f.gid = uid, gid
+	}
 }
 
 // Get returns the raw bytes stored at path, for test assertions.

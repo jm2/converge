@@ -3,6 +3,7 @@ package condition
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/TsekNet/converge/internal/shell"
@@ -25,10 +26,17 @@ func Shell(command string) *shellCondition {
 	}
 }
 
+// shellTimeout bounds a single Met() evaluation so a slow or blocking command
+// cannot stall the caller indefinitely. The daemon evaluates conditions
+// synchronously while starting watchers, so an unbounded command would hang the
+// whole daemon. It is a package var so tests can shorten it.
+var shellTimeout = 30 * time.Second
+
 type shellCondition struct {
 	shellName      string
 	command        string
 	expectedOutput string
+	matchSet       bool // true once Match was called (so Match("") is meaningful)
 }
 
 // In sets an explicit shell. Accepts "powershell", "pwsh", "cmd", "bash",
@@ -38,21 +46,25 @@ func (c *shellCondition) In(shellName string) *shellCondition {
 	return c
 }
 
-// Match sets the expected trimmed stdout. When set, the condition is met
-// when the command's trimmed output equals expected (instead of exit code 0).
+// Match sets the expected trimmed stdout. Once called, the condition is met
+// when the command's trimmed output equals the trimmed expected value (instead
+// of exit code 0). Calling Match("") is meaningful: it asserts empty output.
 func (c *shellCondition) Match(expected string) *shellCondition {
 	c.expectedOutput = expected
+	c.matchSet = true
 	return c
 }
 
 func (c *shellCondition) Met(ctx context.Context) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, shellTimeout)
+	defer cancel()
 	stdout, err := shell.Run(ctx, c.shellName, c.command, nil)
 
-	if c.expectedOutput != "" {
+	if c.matchSet {
 		if err != nil {
 			return false, err
 		}
-		return stdout == c.expectedOutput, nil
+		return strings.TrimSpace(stdout) == strings.TrimSpace(c.expectedOutput), nil
 	}
 
 	return err == nil, nil
@@ -74,7 +86,7 @@ func (c *shellCondition) Wait(ctx context.Context) error {
 }
 
 func (c *shellCondition) String() string {
-	if c.expectedOutput != "" {
+	if c.matchSet {
 		return fmt.Sprintf("shell %s: %s == %q", c.shellName, shell.Truncate(c.command, 40), c.expectedOutput)
 	}
 	return fmt.Sprintf("shell %s: %s", c.shellName, shell.Truncate(c.command, 40))

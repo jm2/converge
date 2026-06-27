@@ -4,7 +4,9 @@ package firewall
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"math/bits"
 	"net"
 	"strings"
 
@@ -22,17 +24,57 @@ const (
 	chainOut  = "output"
 )
 
-// Check determines whether a matching nftables rule exists.
+// Check determines whether a matching nftables rule exists with the desired
+// attributes. Matching by name (UserData) alone is insufficient: a rule that
+// was flipped block->allow or re-pointed to another port/source still carries
+// the same name, so Check decodes the rule's expressions and compares
+// port/protocol/verdict/source/dest against the desired spec. Any mismatch is
+// reported as drift so Apply (delete-by-name then re-add) corrects it.
 func (f *Firewall) Check(_ context.Context) (*extensions.State, error) {
-	exists, err := f.ruleExists()
+	if err := f.validErr(); err != nil {
+		return nil, err
+	}
+	c, err := nftables.New()
 	if err != nil {
 		return nil, fmt.Errorf("check firewall rule %q: %w", f.Name, err)
 	}
-	return checkResult(f.Name, exists, f.State != "absent")
+	matched, err := f.findMatchingRules(c)
+	if err != nil {
+		return nil, fmt.Errorf("check firewall rule %q: %w", f.Name, err)
+	}
+
+	if f.State == "absent" {
+		// Want absent: in sync only if no name-matching rule exists.
+		return checkResult(f.Name, len(matched) > 0, false)
+	}
+
+	// Want present: in sync only when EXACTLY ONE name-matching rule exists and
+	// its decoded attributes match the desired spec. Duplicates (e.g. from
+	// out-of-band edits or an interrupted run) are treated as drift so Apply
+	// (delete-all-by-name then re-add one) collapses them to the canonical rule.
+	if len(matched) == 1 && f.attrsMatch(decodeRule(matched[0].Exprs)) {
+		return &extensions.State{InSync: true}, nil
+	}
+	action := "add"
+	if len(matched) > 0 {
+		action = "modify"
+	}
+	return &extensions.State{
+		InSync: false,
+		Changes: []extensions.Change{{
+			Property: "rule",
+			From:     boolToState(len(matched) > 0),
+			To:       "present",
+			Action:   action,
+		}},
+	}, nil
 }
 
 // Apply creates or removes the nftables rule.
 func (f *Firewall) Apply(_ context.Context) (*extensions.Result, error) {
+	if err := f.validErr(); err != nil {
+		return nil, err
+	}
 	if f.State == "absent" {
 		return f.removeRule()
 	}
@@ -111,18 +153,6 @@ func (f *Firewall) deleteExistingRules(c *nftables.Conn) error {
 	return nil
 }
 
-func (f *Firewall) ruleExists() (bool, error) {
-	c, err := nftables.New()
-	if err != nil {
-		return false, fmt.Errorf("nftables conn: %w", err)
-	}
-	matched, err := f.findMatchingRules(c)
-	if err != nil {
-		return false, err
-	}
-	return len(matched) > 0, nil
-}
-
 func ensureTable(c *nftables.Conn) *nftables.Table {
 	return c.AddTable(&nftables.Table{
 		Name:   tableName,
@@ -150,19 +180,26 @@ func (f *Firewall) ensureChain(c *nftables.Conn, table *nftables.Table) *nftable
 }
 
 func (f *Firewall) buildRule(c *nftables.Conn, table *nftables.Table, chain *nftables.Chain) {
-	var exprs []expr.Any
+	c.AddRule(&nftables.Rule{
+		Table:    table,
+		Chain:    chain,
+		Exprs:    f.buildExprs(),
+		UserData: []byte(f.Name),
+	})
+}
 
-	proto := unix.IPPROTO_TCP
-	if strings.EqualFold(f.Protocol, "udp") {
-		proto = unix.IPPROTO_UDP
-	}
+// buildExprs builds the nftables match/verdict expressions for this rule. It is
+// the single source of truth for a rule's on-wire shape: Apply uses it to write
+// the rule and the Check decoder (decodeRule) mirrors it to read one back.
+func (f *Firewall) buildExprs() []expr.Any {
+	var exprs []expr.Any
 
 	exprs = append(exprs,
 		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
 		&expr.Cmp{
 			Op:       expr.CmpOpEq,
 			Register: 1,
-			Data:     []byte{byte(proto)},
+			Data:     []byte{f.protoNum()},
 		},
 	)
 
@@ -193,18 +230,25 @@ func (f *Firewall) buildRule(c *nftables.Conn, table *nftables.Table, chain *nft
 		exprs = append(exprs, matchAddr(f.Dest, 16)...) // Dest IP offset in IPv4.
 	}
 
-	verdict := expr.VerdictAccept
-	if f.Action == "block" {
-		verdict = expr.VerdictDrop
-	}
-	exprs = append(exprs, &expr.Verdict{Kind: verdict})
+	exprs = append(exprs, &expr.Verdict{Kind: f.verdict()})
 
-	c.AddRule(&nftables.Rule{
-		Table:    table,
-		Chain:    chain,
-		Exprs:    exprs,
-		UserData: []byte(f.Name),
-	})
+	return exprs
+}
+
+// protoNum returns the IP protocol number for this rule's protocol.
+func (f *Firewall) protoNum() byte {
+	if strings.EqualFold(f.Protocol, "udp") {
+		return byte(unix.IPPROTO_UDP)
+	}
+	return byte(unix.IPPROTO_TCP)
+}
+
+// verdict returns the nftables verdict for this rule's action.
+func (f *Firewall) verdict() expr.VerdictKind {
+	if f.Action == "block" {
+		return expr.VerdictDrop
+	}
+	return expr.VerdictAccept
 }
 
 // matchAddr builds nftables expressions to match an IP or CIDR address.
@@ -263,4 +307,149 @@ func (f *Firewall) chainName() string {
 
 func hasUserData(rule *nftables.Rule, name string) bool {
 	return string(rule.UserData) == name
+}
+
+// ruleAttrs holds the decoded, comparable attributes of an nftables rule. It is
+// the read-side mirror of buildExprs: only the fields converge sets are tracked.
+type ruleAttrs struct {
+	proto      byte
+	hasProto   bool
+	port       uint16
+	hasPort    bool
+	verdict    expr.VerdictKind
+	hasVerdict bool
+	src        addrMatch
+	dst        addrMatch
+}
+
+// addrMatch is a decoded IPv4 address constraint. prefix is the CIDR prefix
+// length (0-32), or -1 when no constraint is present (matches "any").
+type addrMatch struct {
+	ip     [4]byte
+	prefix int
+}
+
+// noAddr is the zero constraint: no source/dest match (i.e. "any").
+var noAddr = addrMatch{prefix: -1}
+
+// decodeRule walks a rule's expressions and extracts the attributes converge
+// cares about. It mirrors buildExprs: protocol via Meta+Cmp, port via a
+// transport-header payload+Cmp, source/dest via network-header payloads
+// (optionally masked by a Bitwise for CIDRs), and the trailing verdict.
+func decodeRule(exprs []expr.Any) ruleAttrs {
+	a := ruleAttrs{src: noAddr, dst: noAddr}
+	for i := 0; i < len(exprs); i++ {
+		switch e := exprs[i].(type) {
+		case *expr.Meta:
+			if e.Key == expr.MetaKeyL4PROTO {
+				if cmp := cmpAt(exprs, i+1); cmp != nil && len(cmp.Data) == 1 {
+					a.proto = cmp.Data[0]
+					a.hasProto = true
+				}
+			}
+		case *expr.Payload:
+			switch {
+			case e.Base == expr.PayloadBaseTransportHeader && e.Offset == 2 && e.Len == 2:
+				if cmp := cmpAt(exprs, i+1); cmp != nil && len(cmp.Data) == 2 {
+					a.port = binary.BigEndian.Uint16(cmp.Data)
+					a.hasPort = true
+				}
+			case e.Base == expr.PayloadBaseNetworkHeader && e.Len == 4:
+				m := decodeAddr(exprs, i)
+				if e.Offset == 12 {
+					a.src = m
+				} else if e.Offset == 16 {
+					a.dst = m
+				}
+			}
+		case *expr.Verdict:
+			a.verdict = e.Kind
+			a.hasVerdict = true
+		}
+	}
+	return a
+}
+
+// cmpAt returns the expression at index i as a *expr.Cmp, or nil.
+func cmpAt(exprs []expr.Any, i int) *expr.Cmp {
+	if i >= 0 && i < len(exprs) {
+		if cmp, ok := exprs[i].(*expr.Cmp); ok {
+			return cmp
+		}
+	}
+	return nil
+}
+
+// decodeAddr reads an address constraint starting at the network-header payload
+// at index i. A bare IP is payload+Cmp (prefix 32); a CIDR is payload+Bitwise+Cmp
+// (prefix derived from the mask). Returns noAddr if the shape is unrecognized.
+func decodeAddr(exprs []expr.Any, i int) addrMatch {
+	m := addrMatch{prefix: 32}
+	j := i + 1
+	if j < len(exprs) {
+		if bw, ok := exprs[j].(*expr.Bitwise); ok {
+			m.prefix = maskToPrefix(bw.Mask)
+			j++
+		}
+	}
+	cmp := cmpAt(exprs, j)
+	if cmp == nil || len(cmp.Data) != 4 {
+		return noAddr
+	}
+	copy(m.ip[:], cmp.Data)
+	return m
+}
+
+// maskToPrefix counts the set bits in a netmask to recover the CIDR prefix.
+func maskToPrefix(mask []byte) int {
+	ones := 0
+	for _, b := range mask {
+		ones += bits.OnesCount8(b)
+	}
+	return ones
+}
+
+// canonAddr converts a desired source/dest string into its addrMatch form so it
+// can be compared against a decoded rule. Empty means "any" (noAddr).
+func canonAddr(addr string) addrMatch {
+	if addr == "" {
+		return noAddr
+	}
+	if _, ipNet, err := net.ParseCIDR(addr); err == nil {
+		m := addrMatch{}
+		copy(m.ip[:], ipNet.IP.To4())
+		m.prefix, _ = ipNet.Mask.Size()
+		return m
+	}
+	if ip := net.ParseIP(addr); ip != nil {
+		m := addrMatch{prefix: 32}
+		copy(m.ip[:], ip.To4())
+		return m
+	}
+	return noAddr
+}
+
+// attrsMatch reports whether a decoded rule matches this Firewall's desired
+// spec across protocol, port, verdict, source, and dest.
+func (f *Firewall) attrsMatch(a ruleAttrs) bool {
+	if !a.hasProto || a.proto != f.protoNum() {
+		return false
+	}
+	if f.Port > 0 {
+		if !a.hasPort || a.port != uint16(f.Port) {
+			return false
+		}
+	} else if a.hasPort {
+		return false
+	}
+	if !a.hasVerdict || a.verdict != f.verdict() {
+		return false
+	}
+	if a.src != canonAddr(f.Source) {
+		return false
+	}
+	if a.dst != canonAddr(f.Dest) {
+		return false
+	}
+	return true
 }
