@@ -607,9 +607,15 @@ func (f *File) checkBlock() (*extensions.State, error) {
 	if existing == "" {
 		action = "add"
 	}
+	// Redact block content when Sensitive, mirroring checkFull, so secret-bearing
+	// blocks never leak into Check diffs (plan/JSON/log output).
+	from, to := shell.Truncate(existing, 60), shell.Truncate(f.Content, 60)
+	if f.Sensitive {
+		from, to = "(sensitive)", "(sensitive)"
+	}
 	return &extensions.State{
 		InSync:  false,
-		Changes: []extensions.Change{{Property: "block", From: shell.Truncate(existing, 60), To: shell.Truncate(f.Content, 60), Action: action}},
+		Changes: []extensions.Change{{Property: "block", From: from, To: to, Action: action}},
 	}, nil
 }
 

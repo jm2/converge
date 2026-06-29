@@ -410,6 +410,29 @@ func TestFile_SensitiveRedactsContent(t *testing.T) {
 	}
 }
 
+// TestFile_SensitiveRedactsBlock verifies Sensitive redaction also covers block
+// mode, where the desired and existing block content would otherwise surface.
+func TestFile_SensitiveRedactsBlock(t *testing.T) {
+	ctx := context.Background()
+	const secret = "API_KEY=TOP-SECRET-VALUE"
+
+	mfs := testutil.NewMapFS()
+	mfs.Set("/etc/app.conf", []byte("# BEGIN secrets\nAPI_KEY=old-secret\n# END secrets\n"), 0600)
+	f := New("/etc/app.conf", Opts{Content: secret, BlockName: "secrets", Sensitive: true, FS: mfs})
+	st, err := f.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if st.InSync {
+		t.Fatal("expected drift (block content differs)")
+	}
+	for _, c := range st.Changes {
+		if strings.Contains(c.From, "old-secret") || strings.Contains(c.To, "TOP-SECRET") {
+			t.Errorf("sensitive block content leaked into change: %+v", c)
+		}
+	}
+}
+
 func TestFile_AbsentRejectsContent(t *testing.T) {
 	f := New("/etc/x", Opts{State: "absent", Content: "oops"})
 	if _, err := f.Check(context.Background()); err == nil {
