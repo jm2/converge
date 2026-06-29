@@ -12,7 +12,7 @@ type Opts struct {
 }
 
 // Service manages a system service. Check/Apply are in platform-specific files
-// (systemd on Linux, SCM on Windows, launchd stub on macOS).
+// (systemd on Linux, SCM on Windows, launchd on macOS).
 type Service struct {
 	Name        string
 	State       string // "running" or "stopped"
