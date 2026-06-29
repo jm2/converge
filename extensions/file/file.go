@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -122,6 +123,26 @@ func (f *File) String() string {
 func (f *File) IsCritical() bool { return f.Critical }
 
 func (f *File) fsys() extensions.FS { return extensions.RealFS(f.FS) }
+
+// resolvePath returns the path used for filesystem operations.
+//
+// For the real OS filesystem (FS is nil, the production case) the path is made
+// absolute via filepath.Abs, which resolves relative paths against the working
+// directory and, on Windows, attaches the volume name — exactly the OS-native
+// behavior callers expect.
+//
+// When a custom FS is injected (only the in-memory MapFS used in tests), the
+// path is a logical key into that filesystem rather than a real OS path. Running
+// filepath.Abs on it would be OS-dependent — on Windows it rewrites a key like
+// "/etc/motd" into "C:\\etc\\motd", which no longer matches the forward-slash
+// key the FS was seeded with. So for an injected FS the path is cleaned with the
+// OS-independent "path" package, keeping logical keys stable across platforms.
+func (f *File) resolvePath() (string, error) {
+	if f.FS != nil {
+		return path.Clean(f.Path), nil
+	}
+	return filepath.Abs(f.Path)
+}
 
 // refuseSymlink rejects operating on a final path component that is a symlink,
 // preventing a pre-planted symlink from redirecting a privileged write or chmod
@@ -257,7 +278,7 @@ func (f *File) contentForChange() string {
 
 // checkFull compares the entire file content against desired state.
 func (f *File) checkFull() (*extensions.State, error) {
-	absPath, err := filepath.Abs(f.Path)
+	absPath, err := f.resolvePath()
 	if err != nil {
 		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
 	}
@@ -327,7 +348,7 @@ func (f *File) checkFull() (*extensions.State, error) {
 
 // applyFull writes the entire file content.
 func (f *File) applyFull() (*extensions.Result, error) {
-	absPath, err := filepath.Abs(f.Path)
+	absPath, err := f.resolvePath()
 	if err != nil {
 		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
 	}
@@ -401,7 +422,7 @@ func (f *File) applyFull() (*extensions.Result, error) {
 // checkRemote verifies the local file exists and its checksum matches.
 // Checksum is required for URL mode (enforced in Check).
 func (f *File) checkRemote() (*extensions.State, error) {
-	absPath, err := filepath.Abs(f.Path)
+	absPath, err := f.resolvePath()
 	if err != nil {
 		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
 	}
@@ -446,7 +467,7 @@ func (f *File) checkRemote() (*extensions.State, error) {
 
 // applyRemote downloads the URL to the local path.
 func (f *File) applyRemote(ctx context.Context) (*extensions.Result, error) {
-	absPath, err := filepath.Abs(f.Path)
+	absPath, err := f.resolvePath()
 	if err != nil {
 		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
 	}
@@ -565,7 +586,7 @@ func (f *File) checkBlock() (*extensions.State, error) {
 		}
 	}
 
-	absPath, err := filepath.Abs(f.Path)
+	absPath, err := f.resolvePath()
 	if err != nil {
 		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
 	}
@@ -626,7 +647,7 @@ func (f *File) applyBlock() (*extensions.Result, error) {
 		}
 	}
 
-	absPath, err := filepath.Abs(f.Path)
+	absPath, err := f.resolvePath()
 	if err != nil {
 		return nil, fmt.Errorf("invalid path %q: %w", f.Path, err)
 	}
