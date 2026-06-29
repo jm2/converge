@@ -153,24 +153,34 @@ func applyOne(ctx context.Context, r extensions.Extension, timeout time.Duration
 }
 
 // gateMet reports whether a resource's condition gate currently allows it to
-// run. A nil condition is always met. Errors are treated as not-met, so a
-// resource is skipped rather than applied against an unknown precondition.
-func gateMet(ctx context.Context, cond extensions.Condition, timeout time.Duration) bool {
+// run. A nil condition is always met. An evaluation error is returned to the
+// caller (not swallowed as "not met"): an unknown precondition is a failure to
+// surface, not a silent skip that would let a run report success while the
+// resource went unapplied.
+func gateMet(ctx context.Context, cond extensions.Condition, timeout time.Duration) (bool, error) {
 	if cond == nil {
-		return true
+		return true, nil
 	}
 	cctx, cancel := withTimeout(ctx, timeout)
 	defer cancel()
-	met, err := cond.Met(cctx)
-	return err == nil && met
+	return cond.Met(cctx)
 }
 
 // applyNode gates a resource on its condition, then applies it. A gated resource
 // whose condition is not yet met is reported as a skipped no-op (StatusOK), not
 // a failure, mirroring the documented "skip until met" semantics (the daemon
-// converges it later via its EventCondition path).
+// converges it later via its EventCondition path). A condition that fails to
+// evaluate is reported as a failure rather than a skip, so a transient gate
+// error cannot silently leave a control unapplied while the run reports success.
 func applyNode(ctx context.Context, r extensions.Extension, timeout time.Duration, noop bool, cond extensions.Condition) applyResult {
-	if !gateMet(ctx, cond, timeout) {
+	met, err := gateMet(ctx, cond, timeout)
+	if err != nil {
+		return applyResult{r, &extensions.Result{
+			Status: extensions.StatusFailed,
+			Err:    fmt.Errorf("condition gate for %s: %w", r.ID(), err),
+		}}
+	}
+	if !met {
 		return applyResult{r, &extensions.Result{Status: extensions.StatusOK, Message: "skipped: condition not met"}}
 	}
 	return applyOne(ctx, r, timeout, noop)

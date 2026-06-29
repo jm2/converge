@@ -46,9 +46,12 @@ func (m *mockExtension) Apply(_ context.Context) (*extensions.Result, error) {
 }
 
 // mockCondition is a fixed-result gate for testing condition handling.
-type mockCondition struct{ met bool }
+type mockCondition struct {
+	met bool
+	err error
+}
 
-func (c mockCondition) Met(_ context.Context) (bool, error) { return c.met, nil }
+func (c mockCondition) Met(_ context.Context) (bool, error) { return c.met, c.err }
 func (c mockCondition) Wait(_ context.Context) error        { return nil }
 func (c mockCondition) String() string                      { return "mock" }
 
@@ -197,6 +200,30 @@ func TestRunApplyDAG_ConditionGate(t *testing.T) {
 	}
 	if code != 2 {
 		t.Errorf("exit code = %d, want 2 (changed)", code)
+	}
+}
+
+// TestRunApplyDAG_ConditionGateError verifies that a condition which fails to
+// evaluate is reported as a failure, not silently skipped as in-sync: a gate
+// error must not let the run report success while the resource went unapplied.
+func TestRunApplyDAG_ConditionGateError(t *testing.T) {
+	t.Parallel()
+
+	r := &mockExtension{id: "file:/gated", name: "File /gated", inSync: false}
+	g := graph.New()
+	if err := g.AddNode(r); err != nil {
+		t.Fatal(err)
+	}
+	g.SetMeta(r.ID(), graph.NodeMeta{Condition: mockCondition{err: fmt.Errorf("probe failed")}})
+	code, err := RunApplyDAG(context.Background(), g, &discardPrinter{}, DefaultOptions())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.applyCalled {
+		t.Error("resource must not be applied when its condition gate errors")
+	}
+	if code != 4 { // AllFailed: the gate error is surfaced, not masked as OK.
+		t.Errorf("exit code = %d, want 4 (gate error reported as failure)", code)
 	}
 }
 
