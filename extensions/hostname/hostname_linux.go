@@ -11,10 +11,13 @@ import (
 	"github.com/TsekNet/converge/extensions"
 )
 
+// sethostname wraps unix.Sethostname for testability.
+var sethostname = unix.Sethostname
+
 // Apply sets the hostname via the sethostname syscall and persists it
 // to /etc/hostname for survival across reboots.
 func (h *Hostname) Apply(_ context.Context) (*extensions.Result, error) {
-	if err := unix.Sethostname([]byte(h.Name)); err != nil {
+	if err := sethostname([]byte(h.Name)); err != nil {
 		return nil, fmt.Errorf("sethostname(%s): %w", h.Name, err)
 	}
 

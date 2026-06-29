@@ -37,7 +37,7 @@ func (u *User) createUser(ctx context.Context) (*extensions.Result, error) {
 	}
 	args = append(args, u.Name)
 
-	cmd := exec.CommandContext(ctx, "useradd", args...)
+	cmd := newCommand(ctx, "useradd", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("useradd %s: %s: %w", u.Name, strings.TrimSpace(string(out)), err)
@@ -60,7 +60,7 @@ func (u *User) modifyUser(ctx context.Context) (*extensions.Result, error) {
 	}
 	args = append(args, u.Name)
 
-	cmd := exec.CommandContext(ctx, "usermod", args...)
+	cmd := newCommand(ctx, "usermod", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("usermod %s: %s: %w", u.Name, strings.TrimSpace(string(out)), err)

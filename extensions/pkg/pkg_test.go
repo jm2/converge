@@ -3,6 +3,7 @@ package pkg
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -210,6 +211,12 @@ func TestPackage_Check_PresentNotInstalled(t *testing.T) {
 }
 
 func TestAptManager_IsInstalled_Live(t *testing.T) {
+	// Exercises the real dpkg-query binary, so it only runs where apt is the
+	// system package manager (Debian/Ubuntu CI). Skip elsewhere instead of
+	// hard-failing on hosts without dpkg.
+	if _, err := exec.LookPath("dpkg-query"); err != nil {
+		t.Skip("dpkg-query not available; skipping apt live test")
+	}
 	ctx := context.Background()
 	mgr := &aptManager{}
 

@@ -2,9 +2,64 @@ package condition
 
 import (
 	"context"
+	"runtime"
 	"testing"
 	"time"
+
+	"github.com/TsekNet/converge/internal/shell"
 )
+
+// shellCmds holds platform-appropriate command strings so the cross-platform
+// exit-code and output-match behavior of condition.Shell can be exercised on
+// both Unix (bash) and Windows (PowerShell) without hardcoding bash syntax.
+// Fields left empty have no straightforward equivalent on that platform and
+// the corresponding case is skipped.
+type shellCmds struct {
+	exitZero    string // exits 0
+	exitOne     string // exits 1 (also used to assert command-failure errors)
+	trueCmd     string // builtin/command that exits 0 ("" if none)
+	falseCmd    string // builtin/command that exits 1 ("" if none)
+	echoHello   string // prints "hello" (no trailing newline where possible)
+	echoHelloNL string // prints "hello" with a trailing newline
+	echoWorld   string // prints "world"
+	echoData    string // prints "data"
+	echoYes     string // prints "yes"
+	empty       string // produces empty output, exits 0
+	multiline   string // multi-line script that prints "hello"
+}
+
+// platformCmds returns command strings for the platform-default shell
+// (PowerShell on Windows, bash on Unix). condition.Shell defaults to
+// shell.Auto, so these run under the OS-appropriate shell.
+func platformCmds() shellCmds {
+	if runtime.GOOS == "windows" {
+		return shellCmds{
+			exitZero: "exit 0",
+			exitOne:  "exit 1",
+			// PowerShell has no `true`/`false` builtins; those cases skip.
+			echoHello:   "Write-Output hello",
+			echoHelloNL: "Write-Output hello",
+			echoWorld:   "Write-Output world",
+			echoData:    "Write-Output data",
+			echoYes:     "Write-Output yes",
+			empty:       "Write-Output ''",
+			multiline:   "$x = 'hello'\nWrite-Output $x",
+		}
+	}
+	return shellCmds{
+		exitZero:    "exit 0",
+		exitOne:     "exit 1",
+		trueCmd:     "true",
+		falseCmd:    "false",
+		echoHello:   "echo -n hello",
+		echoHelloNL: "echo hello",
+		echoWorld:   "echo -n world",
+		echoData:    "echo -n data",
+		echoYes:     "echo -n yes",
+		empty:       `printf ''`,
+		multiline:   "x=hello\necho -n $x",
+	}
+}
 
 // TestShell_Met_Timeout verifies a blocking command cannot hang Met()
 // indefinitely: shellTimeout bounds it so the daemon (which evaluates conditions
@@ -28,20 +83,25 @@ func TestShell_Met_Timeout(t *testing.T) {
 
 func TestShell_Met_ExitCode(t *testing.T) {
 	ctx := context.Background()
+	cmds := platformCmds()
 
 	tests := []struct {
 		name    string
 		command string
 		wantMet bool
 	}{
-		{"exit 0 = met", "exit 0", true},
-		{"exit 1 = not met", "exit 1", false},
-		{"true = met", "true", true},
-		{"false = not met", "false", false},
+		{"exit 0 = met", cmds.exitZero, true},
+		{"exit 1 = not met", cmds.exitOne, false},
+		{"true = met", cmds.trueCmd, true},
+		{"false = not met", cmds.falseCmd, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := Shell(tt.command).In("bash")
+			if tt.command == "" {
+				t.Skip("no equivalent command on this platform")
+			}
+			// Default shell (shell.Auto): bash on Unix, PowerShell on Windows.
+			c := Shell(tt.command)
 			met, err := c.Met(ctx)
 			if err != nil {
 				t.Fatalf("Met() error = %v", err)
@@ -55,6 +115,7 @@ func TestShell_Met_ExitCode(t *testing.T) {
 
 func TestShell_Met_OutputMatch(t *testing.T) {
 	ctx := context.Background()
+	cmds := platformCmds()
 
 	tests := []struct {
 		name    string
@@ -63,14 +124,14 @@ func TestShell_Met_OutputMatch(t *testing.T) {
 		wantMet bool
 		wantErr bool
 	}{
-		{"output matches", "echo -n hello", "hello", true, false},
-		{"output differs", "echo -n world", "hello", false, false},
-		{"trailing newline trimmed", "echo hello", "hello", true, false},
-		{"command fails, returns error", "false", "hello", false, true},
+		{"output matches", cmds.echoHello, "hello", true, false},
+		{"output differs", cmds.echoWorld, "hello", false, false},
+		{"trailing newline trimmed", cmds.echoHelloNL, "hello", true, false},
+		{"command fails, returns error", cmds.exitOne, "hello", false, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := Shell(tt.command).In("bash").Match(tt.expect)
+			c := Shell(tt.command).Match(tt.expect)
 			met, err := c.Met(ctx)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Met() error = %v, wantErr %v", err, tt.wantErr)
@@ -84,10 +145,11 @@ func TestShell_Met_OutputMatch(t *testing.T) {
 
 func TestShell_Met_MatchEmpty(t *testing.T) {
 	ctx := context.Background()
+	cmds := platformCmds()
 
 	t.Run("empty output asserted via Match(\"\")", func(t *testing.T) {
-		// printf with no args produces no output; Match("") must assert that.
-		c := Shell(`printf ''`).In("bash").Match("")
+		// A command with no output; Match("") must assert that.
+		c := Shell(cmds.empty).Match("")
 		met, err := c.Met(ctx)
 		if err != nil {
 			t.Fatalf("Met() error = %v", err)
@@ -98,7 +160,7 @@ func TestShell_Met_MatchEmpty(t *testing.T) {
 	})
 
 	t.Run("non-empty output fails Match(\"\")", func(t *testing.T) {
-		c := Shell("echo -n data").In("bash").Match("")
+		c := Shell(cmds.echoData).Match("")
 		met, err := c.Met(ctx)
 		if err != nil {
 			t.Fatalf("Met() error = %v", err)
@@ -110,7 +172,7 @@ func TestShell_Met_MatchEmpty(t *testing.T) {
 
 	t.Run("without Match, exit code governs", func(t *testing.T) {
 		// No Match call: empty output but exit 0 is still met.
-		c := Shell(`printf ''`).In("bash")
+		c := Shell(cmds.empty)
 		met, err := c.Met(ctx)
 		if err != nil {
 			t.Fatalf("Met() error = %v", err)
@@ -123,10 +185,11 @@ func TestShell_Met_MatchEmpty(t *testing.T) {
 
 func TestShell_Met_MatchTrimsBothSides(t *testing.T) {
 	ctx := context.Background()
+	cmds := platformCmds()
 
 	// Expected value carries surrounding whitespace; it must be trimmed too,
 	// so it still matches the (trimmed) command output.
-	c := Shell("echo hello").In("bash").Match("  hello\n")
+	c := Shell(cmds.echoHelloNL).Match("  hello\n")
 	met, err := c.Met(ctx)
 	if err != nil {
 		t.Fatalf("Met() error = %v", err)
@@ -158,10 +221,12 @@ func TestShell_String(t *testing.T) {
 
 func TestShell_ChainOrder(t *testing.T) {
 	ctx := context.Background()
+	cmds := platformCmds()
 
-	// .In().Match() and .Match().In() should produce the same result
-	a := Shell("echo -n yes").In("bash").Match("yes")
-	b := Shell("echo -n yes").Match("yes").In("bash")
+	// .In().Match() and .Match().In() should produce the same result. Use
+	// shell.Auto so the script runs under the OS-appropriate shell.
+	a := Shell(cmds.echoYes).In(shell.Auto).Match("yes")
+	b := Shell(cmds.echoYes).Match("yes").In(shell.Auto)
 
 	metA, _ := a.Met(ctx)
 	metB, _ := b.Met(ctx)
@@ -176,11 +241,13 @@ func TestShell_ChainOrder(t *testing.T) {
 
 func TestShell_MultilineScript(t *testing.T) {
 	ctx := context.Background()
+	cmds := platformCmds()
 
-	c := Shell("x=hello\necho -n $x").In("bash").Match("hello")
+	// Multi-line script in the platform-default shell should match output.
+	c := Shell(cmds.multiline).Match("hello")
 	met, _ := c.Met(ctx)
 	if !met {
-		t.Error("multi-line bash script should match output")
+		t.Error("multi-line script should match output")
 	}
 }
 

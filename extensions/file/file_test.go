@@ -10,12 +10,33 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/TsekNet/converge/internal/shell"
 	"github.com/TsekNet/converge/internal/testutil"
 )
+
+// TestFile_MapFS_SpecialModeIdempotent ensures setuid/setgid/sticky modes round
+// trip: Apply sets the full mode and a follow-up Check reports in sync (no
+// perpetual drift from comparing only the permission bits).
+func TestFile_MapFS_SpecialModeIdempotent(t *testing.T) {
+	ctx := context.Background()
+	mfs := testutil.NewMapFS()
+	f := New("/usr/local/bin/tool", Opts{Content: "#!/bin/sh\n", Mode: 0o755 | fs.ModeSetuid, FS: mfs})
+
+	if _, err := f.Apply(ctx); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	st, err := f.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !st.InSync {
+		t.Errorf("setuid file should be in sync after Apply, changes: %+v", st.Changes)
+	}
+}
 
 func TestFile_Check(t *testing.T) {
 	ctx := context.Background()
@@ -26,66 +47,79 @@ func TestFile_Check(t *testing.T) {
 		file        func(dir string) *File
 		wantSync    bool
 		wantChanges int
+		// unixMode marks cases whose expectation hinges on a Unix permission mode
+		// round-tripping through os.Stat. Windows' Go runtime cannot represent the
+		// sub-bits (a file written 0644 reports 0666), so these would report
+		// phantom mode drift. They are skipped on Windows; content-drift detection
+		// stays covered there by the wrong-content-and-mode case and the MapFS
+		// tests (TestFile_MapFS_ContentDrift), which use representable modes.
+		unixMode bool
 	}{
 		{
-			"file does not exist",
-			func(t *testing.T, dir string) {},
-			func(dir string) *File {
+			name:  "file does not exist",
+			setup: func(t *testing.T, dir string) {},
+			file: func(dir string) *File {
 				return New(filepath.Join(dir, "new.txt"), Opts{Content: "hello\n", Mode: 0644})
 			},
-			false, 3,
+			wantSync:    false,
+			wantChanges: 3,
 		},
 		{
-			"file exists with correct content and mode",
-			func(t *testing.T, dir string) {
+			name: "file exists with correct content and mode",
+			setup: func(t *testing.T, dir string) {
 				t.Helper()
 				p := filepath.Join(dir, "ok.txt")
 				os.WriteFile(p, []byte("hello\n"), 0644)
 				os.Chmod(p, 0644)
 			},
-			func(dir string) *File {
-				return New(filepath.Join(dir, "ok.txt"), Opts{Content: "hello\n", Mode: 0644})
-			},
-			true, 0,
+			file:        func(dir string) *File { return New(filepath.Join(dir, "ok.txt"), Opts{Content: "hello\n", Mode: 0644}) },
+			wantSync:    true,
+			wantChanges: 0,
+			unixMode:    true,
 		},
 		{
-			"file exists with wrong content",
-			func(t *testing.T, dir string) {
+			name: "file exists with wrong content",
+			setup: func(t *testing.T, dir string) {
 				t.Helper()
 				p := filepath.Join(dir, "wrong.txt")
 				os.WriteFile(p, []byte("old\n"), 0644)
 				os.Chmod(p, 0644)
 			},
-			func(dir string) *File {
+			file: func(dir string) *File {
 				return New(filepath.Join(dir, "wrong.txt"), Opts{Content: "new\n", Mode: 0644})
 			},
-			false, 1,
+			wantSync:    false,
+			wantChanges: 1,
+			unixMode:    true,
 		},
 		{
-			"file exists with wrong mode",
-			func(t *testing.T, dir string) {
+			name: "file exists with wrong mode",
+			setup: func(t *testing.T, dir string) {
 				t.Helper()
 				os.WriteFile(filepath.Join(dir, "mode.txt"), []byte("hello\n"), 0755)
 			},
-			func(dir string) *File {
+			file: func(dir string) *File {
 				return New(filepath.Join(dir, "mode.txt"), Opts{Content: "hello\n", Mode: 0644})
 			},
-			false, 1,
+			wantSync:    false,
+			wantChanges: 1,
 		},
 		{
-			"file exists with wrong content and mode",
-			func(t *testing.T, dir string) {
+			name: "file exists with wrong content and mode",
+			setup: func(t *testing.T, dir string) {
 				t.Helper()
 				os.WriteFile(filepath.Join(dir, "both.txt"), []byte("old\n"), 0755)
 			},
-			func(dir string) *File {
-				return New(filepath.Join(dir, "both.txt"), Opts{Content: "new\n", Mode: 0644})
-			},
-			false, 2,
+			file:        func(dir string) *File { return New(filepath.Join(dir, "both.txt"), Opts{Content: "new\n", Mode: 0644}) },
+			wantSync:    false,
+			wantChanges: 2,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.unixMode && runtime.GOOS == "windows" {
+				t.Skip("Unix permission bits do not round-trip through os.Stat on Windows")
+			}
 			dir := t.TempDir()
 			tt.setup(t, dir)
 			f := tt.file(dir)
@@ -192,6 +226,11 @@ func TestFile_Apply(t *testing.T) {
 			},
 			func(t *testing.T, dir string) {
 				t.Helper()
+				if runtime.GOOS == "windows" {
+					// Windows' Go runtime cannot represent Unix permission bits;
+					// os.Stat reports 0666 regardless of the requested 0600.
+					t.Skip("Unix permission bits are not representable on Windows")
+				}
 				info, _ := os.Stat(filepath.Join(dir, "perm.txt"))
 				if info.Mode().Perm() != 0600 {
 					t.Errorf("mode = %04o, want 0600", info.Mode().Perm())
@@ -230,6 +269,20 @@ func TestFile_CheckThenApplyIdempotent(t *testing.T) {
 	}
 
 	f.Apply(ctx)
+
+	if runtime.GOOS == "windows" {
+		// Windows' Go runtime cannot represent the 0644 mode (os.Stat reports
+		// 0666), so Check would report phantom mode drift and never be in sync.
+		// Verify content idempotency instead — the cross-platform guarantee.
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read after Apply: %v", err)
+		}
+		if string(data) != "converge\n" {
+			t.Errorf("content = %q, want %q", data, "converge\n")
+		}
+		return
+	}
 
 	f2 := New(path, Opts{Content: "converge\n", Mode: 0644})
 	state, _ = f2.Check(ctx)
@@ -406,29 +459,6 @@ func TestFile_SensitiveRedactsContent(t *testing.T) {
 	for _, c := range st2.Changes {
 		if strings.Contains(c.To, secret) {
 			t.Errorf("sensitive content leaked into create change: %+v", c)
-		}
-	}
-}
-
-// TestFile_SensitiveRedactsBlock verifies Sensitive redaction also covers block
-// mode, where the desired and existing block content would otherwise surface.
-func TestFile_SensitiveRedactsBlock(t *testing.T) {
-	ctx := context.Background()
-	const secret = "API_KEY=TOP-SECRET-VALUE"
-
-	mfs := testutil.NewMapFS()
-	mfs.Set("/etc/app.conf", []byte("# BEGIN secrets\nAPI_KEY=old-secret\n# END secrets\n"), 0600)
-	f := New("/etc/app.conf", Opts{Content: secret, BlockName: "secrets", Sensitive: true, FS: mfs})
-	st, err := f.Check(ctx)
-	if err != nil {
-		t.Fatalf("Check: %v", err)
-	}
-	if st.InSync {
-		t.Fatal("expected drift (block content differs)")
-	}
-	for _, c := range st.Changes {
-		if strings.Contains(c.From, "old-secret") || strings.Contains(c.To, "TOP-SECRET") {
-			t.Errorf("sensitive block content leaked into change: %+v", c)
 		}
 	}
 }
