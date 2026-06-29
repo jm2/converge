@@ -218,6 +218,47 @@ func TestRunApplyDAG_ConvergenceFailure(t *testing.T) {
 	}
 }
 
+// alwaysAppliesMock is a resource that applies successfully but never reports
+// in-sync (like a guardless Exec), and opts out of the post-Apply re-Check.
+type alwaysAppliesMock struct {
+	mockExtension
+	always bool
+}
+
+func (a *alwaysAppliesMock) AlwaysApplies() bool { return a.always }
+
+// TestRunApplyDAG_AlwaysApplies verifies the post-Apply re-Check is skipped for
+// a resource that intentionally always applies (e.g. a guardless Exec): a
+// successful Apply is a change, not a "still out of sync after apply" failure.
+func TestRunApplyDAG_AlwaysApplies(t *testing.T) {
+	t.Parallel()
+
+	// always=true: stays out of sync by design, but must NOT be reported failed.
+	g := makeGraph(
+		&alwaysAppliesMock{mockExtension: mockExtension{id: "exec:run", name: "Exec run", inSync: false, staysOutOfSync: true}, always: true},
+	)
+	code, err := RunApplyDAG(context.Background(), g, &discardPrinter{}, DefaultOptions())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if code != 2 { // Changed: the command ran successfully.
+		t.Errorf("exit code = %d, want 2 (changed, re-Check skipped)", code)
+	}
+
+	// always=false (guarded Exec): the re-Check still applies, so a resource that
+	// stays out of sync is reported as a convergence failure.
+	g2 := makeGraph(
+		&alwaysAppliesMock{mockExtension: mockExtension{id: "exec:guarded", name: "Exec guarded", inSync: false, staysOutOfSync: true}, always: false},
+	)
+	code, err = RunApplyDAG(context.Background(), g2, &discardPrinter{}, DefaultOptions())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if code != 4 { // AllFailed: guarded resource still out of sync after apply.
+		t.Errorf("exit code = %d, want 4 (guarded re-Check still enforced)", code)
+	}
+}
+
 func TestRunApplyDAG_Parallel(t *testing.T) {
 	t.Parallel()
 

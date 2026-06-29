@@ -19,6 +19,17 @@ type CriticalResource interface {
 	IsCritical() bool
 }
 
+// AlwaysApplies is optionally implemented by resources that intentionally never
+// reach an in-sync state on their own — e.g. a guardless Exec that is meant to
+// run on every convergence. For such a resource, Check reporting drift again
+// immediately after a successful Apply is its correct contract, not a failure,
+// so the engine skips the post-Apply convergence re-Check when this returns true.
+// (Adding an idempotency guard makes the resource convergent again, so the value
+// is evaluated per instance rather than per type.)
+type AlwaysApplies interface {
+	AlwaysApplies() bool
+}
+
 // Watcher is optionally implemented by extensions that support OS-level
 // event watching. Watch blocks until ctx is cancelled, sending events
 // on the channel when the resource may have drifted.

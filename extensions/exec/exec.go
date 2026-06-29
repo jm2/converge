@@ -77,6 +77,16 @@ func (e *Exec) ID() string       { return fmt.Sprintf("exec:%s", e.Name) }
 func (e *Exec) String() string   { return fmt.Sprintf("Exec %s", e.Name) }
 func (e *Exec) IsCritical() bool { return e.Critical }
 
+// AlwaysApplies reports whether this Exec has no idempotency guard, in which
+// case Check always reports out-of-sync and the command runs on every
+// convergence. The engine uses this to skip the post-Apply re-Check, which
+// would otherwise flag a successful guardless run as "still out of sync after
+// apply". A guarded Exec is convergent (the guard short-circuits Check once
+// satisfied), so it returns false and is verified normally.
+func (e *Exec) AlwaysApplies() bool {
+	return e.Creates == "" && e.OnlyIf == "" && e.Unless == ""
+}
+
 // applyCmd builds an exec.Cmd for the Apply command.
 func (e *Exec) applyCmd(ctx context.Context) *osexec.Cmd {
 	if e.Shell != "" {

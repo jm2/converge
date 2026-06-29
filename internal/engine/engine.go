@@ -130,6 +130,13 @@ func applyOne(ctx context.Context, r extensions.Extension, timeout time.Duration
 	// Verify convergence: re-Check after a successful Apply. A resource that
 	// reports success but is still out of sync did not actually converge, so
 	// report it as a failure rather than masking the drift as success.
+	//
+	// Resources that intentionally always apply (e.g. a guardless Exec that runs
+	// every convergence) never report in-sync on their own, so skip the re-Check
+	// for them — "still drifted" is their contract, not a failure.
+	if aa, ok := r.(extensions.AlwaysApplies); ok && aa.AlwaysApplies() {
+		return applyResult{r, result}
+	}
 	rctx, cancel = withTimeout(ctx, timeout)
 	newState, checkErr := r.Check(rctx)
 	cancel()
